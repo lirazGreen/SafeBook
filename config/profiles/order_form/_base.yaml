@@ -11,8 +11,11 @@ fields:
   amount:
     labels: ["Total fee", "Total Subscription Fee", "Total Price"]
   payment_terms:
-    strategy: llm                  # order forms bury this in prose
-    sections: ["Payment Terms", "Terms and Conditions"]
+    # No strategy declared. Every field tries its deterministic rule first and
+    # escalates to Claude only if that yields nothing or fails to parse. "Needs
+    # an LLM" is not a property anyone declares — it is what the document does.
+    labels: ["Payment Terms"]
+    sections: ["Payment Terms", "Terms and Conditions"]   # sent only if it escalates
 
 items:
   column_synonyms:
@@ -24,6 +27,11 @@ items:
   tolerance: 0.01
 
 special_terms:
-  strategy: llm                    # numbered prose, no labels
   section: "Special Terms"
+  # POs label their terms ("Burst (Item Level):"), so labelled_bullets parses them
+  # and nothing escalates. Order forms number them without labels, so the bullet
+  # parse finds nothing and this escalates. Same config, both behaviours.
+  type_labels:
+    burst: ["Burst (Item Level)", "Burst"]
+    technical_account_manager: ["Technical Account Manager"]
   unknown_type: unknown

@@ -51,7 +51,8 @@ contains only the brief and `sample docs/`. No git repo yet.
 | Profile storage | `definition` holds the **merged** result — the seeder resolves `extends: _base` once, so a row is self-contained and needs no re-merge to interpret |
 | LLM in tests | Recorded Claude responses committed as fixtures → tests run offline |
 | Model | **`claude-opus-5`**, id in config. No `temperature`/`budget_tokens` (both 400 on this model); depth via `output_config.effort` |
-| LLM calls | **One per section** — payment terms, special terms, + doc-type tiebreak when scores are close |
+| **When the LLM runs** | **Deterministic-first, escalate on failure.** Never declared per customer — a field tries its rule, and reaches Claude only if that yields nothing or fails to parse. Two of the four samples never escalate |
+| LLM calls | At most one per escalating section. The item table never escalates |
 | LLM output | `client.messages.parse()` + `zodOutputFormat`; model returns `quote`, **we** resolve offsets via `indexOf` |
 | UI | **None.** Brief asks for repo + README; a read-only HTML page is a stretch goal, not a phase |
 | Upload | `POST /documents` multipart, 1..N files, per-file results (`202`/`207`); duplicate sha256 → `200`, no job |
@@ -1057,6 +1058,46 @@ around:
 The reconciliation checks are what make that trustworthy — if reconstruction goes wrong,
 `Σ items == amount` breaks rather than producing a plausible-looking total.
 
+## When does the LLM run?
+
+**Not by declaration.** An earlier draft had profiles say `strategy: llm` per field, which
+quietly assumed someone had inspected that customer's documents — impossible for a customer
+nobody has configured. The logic is instead:
+
+```
+for each scalar field:
+  1. run the deterministic rule (label lookup / labelled bullets / signature marker)
+  2. did it yield a value that PARSES?
+       yes -> accept. source='rule'. no call.
+  3. no  -> escalate to Claude
+  4. Claude fails, or no API key -> null + FIELD_NOT_FOUND flag
+```
+
+The LLM is never *chosen*, it is *reached*. Against the real documents:
+
+| Document | `Payment Terms:` label present | Its text parses as `Net xx` | Outcome |
+|---|---|---|---|
+| BrightOps | yes | `Net 30` → **yes** | rule, **no call** |
+| NovaFleet | yes | `Net 45` → **yes** | rule, **no call** |
+| Acme | yes | *"shall be made in advance of such period. Payment shall be made within thirty (30) days from invoice"* → **no** | **escalates** → 30 |
+| CloudShield | yes | prose → **no** | **escalates** → 45 |
+
+Identical code path, opposite outcomes, **no per-customer configuration**. Special terms behave
+the same way: `labelled_bullets` finds `Burst (Item Level):` on both POs and returns two terms,
+so nothing escalates; on the order forms it finds no labels and escalates.
+
+Three consequences:
+
+- **The seam exists from phase 2**, with nothing behind it (escalation returns `null` + flag).
+  Phase 6 plugs Claude in. Adding Acme then needs no restructuring.
+- **The service runs with no API key**, deterministic-only — lower recall on prose fields, no
+  failures. A reviewer can clone and run it immediately.
+- **The item table never escalates.** It is geometry rather than language, reconstruction is
+  self-checking via `Σ items == amount`, and an LLM would be strictly worse at it.
+
+Covered by `tests/unit/escalation.test.ts`, including that `escalate` is asserted **not
+called** for the POs.
+
 ## LLM extraction contract
 
 Model **`claude-opus-5`** (id in config so the accuracy harness can compare). Verified against
@@ -1075,7 +1116,7 @@ Two calls for a typical document, three when classification is close:
 
 | Call | Input | Schema |
 |---|---|---|
-| `payment_terms` | the `Payment Terms` / `Terms and Conditions` section only | `{ value: "Net 45", quote }` |
+| `payment_terms` | the `Payment Terms` / `Terms and Conditions` section — **only when the rule failed** | `{ value: 45, quote }` |
 | `special_terms` | the `Special Terms` section only | array of `{ term_type, percent?, cap?, period?, applies_to?, quote }` |
 | `doc_type` tiebreak | page-1 text, only when `|score_of − score_po| < 3` | `{ doc_type, quote }` |
 

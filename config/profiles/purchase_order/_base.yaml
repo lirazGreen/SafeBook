@@ -1,0 +1,37 @@
+# Base profile for ANY purchase order. A customer file states only its deltas.
+doc_type: purchase_order
+
+fields:
+  start_date:
+    labels: ["Start Date", "Subscription Start Date", "Contract Start Date"]
+    input_formats: [long_month, slash_mdy, dash_mdy]
+  end_date:
+    labels: ["End Date", "Subscription End Date", "Contract End Date"]
+    input_formats: [long_month, slash_mdy, dash_mdy]
+  amount:
+    labels: ["Total fee", "Total Subscription Fee", "Total Price"]
+  payment_terms:
+    # No strategy declared. Every field tries its deterministic rule first and
+    # escalates to Claude only if that yields nothing or fails to parse. "Needs
+    # an LLM" is not a property anyone declares — it is what the document does.
+    labels: ["Payment Terms"]
+    sections: ["Payment Terms", "Terms and Conditions"]   # sent only if it escalates
+
+items:
+  column_synonyms:
+    product_name: ["Name", "Product Name", "Subscriptions", "Description"]
+    quantity:     ["Quantity", "Quantity of Billable Units"]
+    unit_price:   ["Rate", "Unit Price", "Monthly / Unit Price"]
+    total_amount: ["Total amount", "Total Amount", "Total Price"]
+  reconcile: quantity * unit_price
+  tolerance: 0.01
+
+special_terms:
+  section: "Special Terms"
+  # POs label their terms ("Burst (Item Level):"), so labelled_bullets parses them
+  # and nothing escalates. Order forms number them without labels, so the bullet
+  # parse finds nothing and this escalates. Same config, both behaviours.
+  type_labels:
+    burst: ["Burst (Item Level)", "Burst"]
+    technical_account_manager: ["Technical Account Manager"]
+  unknown_type: unknown
