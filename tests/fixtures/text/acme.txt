@@ -1,0 +1,40 @@
+Quote Number: Q-20702
+Quote Date: May 12, 2025
+Quote Expiration Date: July 1, 2025
+To: Appsoft Inc.
+Order Form
+This Order Form is subject to applicable European regulations, including but not limited to GDPR and tax compliance
+requirements. The parties acknowledge that specific terms may vary depending on the jurisdiction.
+Customer Information
+Customer Billing Company Name: Appsoft Inc.
+Bill To: 123 Main Street, New York, NY, USA
+Start Date: January 1, 2025
+End Date: December 31, 2026
+Terms and Conditions
+Billing Frequency: Annual
+Payment Terms: Payment of the Total Subscription Fee shall be made in advance of such period. Payment shall be
+made within thirty (30) days from invoice.
+Order Details
+Name Start Date End Date Rate Quantity Total amount
+SaaS Subscription Jan 1,2025 Dec 31,2025 $50,000 1 $50,000
+SaaS Subscription Jan 1,2026 Dec 31,2026 $60,000 1 $60,000
+Premium Support Jan 1,2025 Dec 31,2025 $250 100 $25,000
+Premium Support Jan 1,2026 Dec 31,2026 $250 50 $12,500
+Training Package Jan 1,2025 Dec 31,2026 $100 50 $5,000
+Total fee: $152,500
+Prices shown above do not include any taxes that may apply. Any such taxes are the responsibility of the customer.
+This is not an invoice.
+Special Terms
+1. 2. During each consecutive 24 months of the Subscription Term described in this Order, Customer shall have
+the right to utilize up to 5% more Billable Units in connection with SaaS subscription than those listed in the
+table above (the “Burst Threshold”), at no additional cost.
+Customer will be assigned a Customer Support Manager and Product Architect
+Acme Appsoft Inc
+Signature:
+Signature:
+Name: John Smith
+Name: Bob Lee
+Title: CFO
+Title: CEO
+Date: 12-13-2024
+Date: 01-02-2025

@@ -1034,17 +1034,34 @@ prompt instructs **returning `null` rather than guessing** — an explicit null 
 signal than a confident-looking wrong answer. Then two deterministic checks:
 
 ```ts
-// 1. did the model invent its citation?
-const start = rawText.indexOf(quote);
-if (start === -1) return reject(field, "LLM_EVIDENCE_MISMATCH");
+// 1. does the quote actually appear in the document?
+const ev = resolver.resolve(quote);                  // src/llm/evidence.ts
+if (ev === null) return reject(field, "LLM_EVIDENCE_MISMATCH");
 
-// 2. is the value actually supported by the text it cited?
-//    numeric fields: the number must appear in the quote, allowing word forms
-//    ("thirty (30)" → 30). Legal drafting almost always gives the numeral.
+// 2. is the value supported by the text it cited?
 if (!valueAppearsIn(quote, value)) return reject(field, "VALUE_NOT_IN_EVIDENCE");
 
-evidence = { page, start, end: start + quote.length, text: quote };
+evidence = { page, start: ev.start, end: ev.end, text: ev.text };
 ```
+
+⚠️ **A naive `rawText.indexOf(quote)` produces false rejections of *correct*
+extractions** — worse than having no check. Two causes, both verified present in the samples:
+
+| Cause | Evidence |
+|---|---|
+| **Line breaks** | Acme's payment clause is laid out `"Payment shall be\nmade within thirty (30) days from invoice."` A model returns it as one line, and `indexOf` returns **-1**. That is one of the six numeric NL fields, so the check would have failed on 1-in-6 of them |
+| **Typography** | Acme uses curly quotes (U+201C/D) around `(the "Burst Threshold")`; CloudShield uses an en-dash (U+2013). Models return ASCII equivalents |
+
+So matching runs against a **normalised copy** — whitespace runs collapsed, curly quotes,
+dashes and fixed-width spaces folded to ASCII — while an index map returns offsets into the
+**original**. The stored evidence is therefore always the document's real characters, newline
+and curly quotes included.
+
+One more rule: **an ambiguous quote is not a match.** `"Premium Support"` appears on four
+separate CloudShield line items, so a quote occurring more than once resolves to `null` rather
+than silently attaching evidence to the wrong part of the document.
+
+Covered by `tests/unit/evidence.test.ts` against the real extracted text of both order forms.
 
 Offsets computed by our own code against the `raw_text` we stored are stronger evidence than
 offsets handed to us, and the `indexOf` failure **is** the hallucination check from the error

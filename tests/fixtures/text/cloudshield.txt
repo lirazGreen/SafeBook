@@ -1,0 +1,154 @@
+CloudShield Security
+Azure Private Offer
+Quote Number: Q-78291
+Quote Date: 1/20/2025
+Quote Expiration Date: 1/27/2025
+Proposed By: Michael Chen
+To: TechNova Solutions, Inc.
+ORDER FORM
+This Order Form ("Order") is entered into by and between CloudShield Security, Inc., a company incorporated
+under the laws of the State of California, with its principal place of business at 500 Innovation Drive, San Jose,
+CA 95134, and the customer whose corporate name and details are detailed below (the "Customer") (each, a
+"Party" and collectively, the "Parties").
+This Order is subject to, governed by, and hereby incorporates by reference the terms and, the Master
+Subscription and Services Agreement No. 72845 dated June 22, 2023, (the "Agreement"). Capitalized terms
+not defined in this Order shall have the meaning defined in the Agreement.
+Customer Information
+Customer Billing Name: TechNova Solutions, Inc.
+Bill to: 2500 Tech Park Boulevard, Austin, Texas 78701
+Customer Billing Name: Sarah Thompson
+Customer Billing Email Address: billing@technova.com
+Customer Billing Phone: +1 (512) 555-8900
+Customer Shipping Address: 2500 Tech Park Boulevard, Austin, Texas 78701
+Subscriptions
+Subscription Term (months) (unless extended according to the terms of this Order Form): 36.00 months
+Subscription Start Date: 3/1/2025
+Subscription End Date: 2/28/2028
+Subscription
+Year Subscriptions Start Date End Date
+Order Term
+(Months)
+Monthly /
+Unit Price
+**
+Quantity of
+Billable
+Units***
+Total Price
+Year 1
+CloudShield
+Enterprise
+3/1/2025 2/28/2026 12.00 3.25 180000 USD 7,020,000.00
+Premium
+Support 3/1/2025 2/28/2026 12.00 22916.67 1 USD 275,000.00
+Year 2
+CloudShield
+Enterprise
+3/1/2026 2/28/2027 12.00 3.25 195000 USD 7,605,000.00
+Premium
+Support 3/1/2026 2/28/2027 12.00 22916.67 1 USD 275,000.00
+Year 3
+CloudShield
+Enterprise
+3/1/2027 2/28/2028 12.00 3.25 210000 USD 8,190,000.00
+Premium
+Support 3/1/2027 2/28/2028 12.00 22916.67 1 USD 275,000.00
+Total Subscription Fee: USD 23,640,000.00
+** Pricing listed is in USD. The Monthly/Unit Price shown above has been rounded to two decimal places for display purposes. The totals for
+this order were calculated using the actual price, rather than the Monthly/Unit Price displayed above, and are the true and binding totals for
+this order.
+*** CloudShield Security reserves the right, following written notice to Customer, to true up the total price of subscriptions described in the
+table above based on Customer's actual usage, and to charge Customer for such additional usage including a corresponding increase for
+Premium Support.
+Payment Terms
+All payments shall be paid to the applicable Azure cloud marketplace. Payment will be made annually (at the
+beginning of each subscription year) and as agreed between Customer and the cloud marketplace. Payment
+will be made within forty-five (45) days of Customer's receipt of an invoice. To extent within CloudShield's
+reasonable control and, to the extent Service Provider is required by Applicable Law to collect taxes for which
+TechNova Solutions is responsible, CloudShield will separately state on the invoice the amount of taxes and the
+jurisdiction(s) for which the taxes are being collected.
+Notwithstanding the Agreement and/or anything to the contrary, Customer may not terminate this Order for
+convenience.
+Special Terms
+1. During each consecutive 12 months of the Subscription Term described in this Order, in addition to
+CloudShield Enterprise, Customer will be entitled to utilize CloudShield Sensor, up to the Burst Threshold
+(defined below) at no additional cost. "Burst Threshold" means the following percentage of the quantity of
+CloudShield Enterprise Billable Units purchased by Customer, taking into account any reductions in
+CloudShield Enterprise Billable Units due to conversions as described in Section 4 below: (a) during Year 1, up
+to 38.89%, (b) during Year 2, up to 28.21%, and (c) during Year 3, up to 19.05%; provided that in no event shall
+the Burst Threshold exceed 280,000 Billable Units during any Subscription Year. CloudShield shall have the
+right to review Customer's actual Billable Unit usage, and in the event such usage exceeds the Burst Threshold,
+CloudShield shall have the right to notify Customer in writing of and provide a true-up order for such excess
+usage (a "Workload True-Up"). Following receipt from CloudShield of a Workload True-Up, Customer agrees to
+purchase, with respect to the period from the date of the Workload True-Up until the Subscription End Date (the
+"True-Up Period"), additional Billable Units in an amount equal to the quantity of Billable Units utilized in excess
+of the amount previously purchased by Customer. Notwithstanding Customer's purchase of additional Billable
+Units, during the Subscription Term described in this Order, Premium Support shall be capped at fixed rate of
+$275,000 per year. During the Subscription Term of this Order, Billable Units shall be calculated according to
+Exhibit A.
+2. Customer shall receive a free trial of CloudShield Code, up to maximum of 4,000 active developers, for 12
+months, commencing on March 1, 2025 and ending on February 28, 2026.
+3. During the Subscription Term (specified in this Order), Customer may elect to purchase additional Billable
+Units for its CloudShield Enterprise subscriptions at the incremental tiered Billable Unit rates listed below:
+CloudShield Enterprise: 1-210,000 cloud workloads - $39/workload/year 210,001-320,000 cloud workloads -
+$35/workload/year 320,001+ cloud workloads - $31/workload/year
+4. During the Subscription Term of this Order, once per annual term, if requested by Customer, Customer shall
+have the right to convert Billable Units of CloudShield Enterprise to Billable Units of CloudShield Code based on
+a ratio of 10 CloudShield Enterprise cloud workloads to 1 CloudShield Code active developers. Provided that
+upon request for any such conversion, prior to such conversion taking place, the Parties will enter into an
+amendment and/or new Order to reflect the revised allocation of Billable Units. For the avoidance of doubt, the
+conversion rights set forth herein shall not apply to any additional Billable Units available to Customer under the
+Burst Threshold.
+5. If Customer elects to extend or renew its CloudShield Enterprise subscription under this Order, during the
+first consecutive renewal subscription term (which may be any combination of 12 month term lengths, but shall
+not exceed, in the aggregate, a total of 36 months), CloudShield will not increase the applicable monthly/unit
+price per Billable Unit for such CloudShield Enterprise subscription by the lesser of (a) five percent (5%) of the
+monthly/unit price set forth in this Order, or the (b) the increase, if any, in the CPI (defined below) in effect for
+the month that is three months before the Subscription End Date. "CPI" means the Consumer Price Index for All
+Urban Consumers (CPI-U), U.S. City Average, All items, not seasonally adjusted, 1982–1984=100 reference
+base, published by the United States Department of Labor, Bureau of Labor Statistics.
+6. On the first consecutive 36 months renewal, provided that Customer commits to a minimum purchase of
+210,000 cloud workloads in the first subscription year, followed by a 5% increase every year of the applicable
+subscription term, Customer shall have the right to utilize up the lesser of (i) 20% of the amount of CloudShield
+Enterprise Billable Units purchased by Customer; or (ii) 42,000 CloudShield Enterprise Billable Units.
+7. As of the Start Date above, this Order will replace any and all certain order forms previously entered into by
+CloudShield and Customer (the "Prior Order(s)"). A credit of $412,583.67 will be due to Customer for unused,
+prepaid fees from the Prior Order(s). CloudShield will apply such credit to the first invoice for this Order.
+Notwithstanding the foregoing and/or anything to contrary, the aforementioned credit amount is the applicable
+credit amount on March 1, 2025 and Customer hereby agrees and understands that if this Order is signed after
+March 1, 2025, such credit amount shall be adjusted by CloudShield accordingly.
+8. The Parties agree to cooperate in good faith and negotiate the terms of the SLA by February 28, 2025 (the
+"Determination Date"), to be evidenced by a mutually agreeable written amendment to the Agreement or this
+Order (the "SLA Amendment Date"). In the event the Parties do not enter into an SLA Amendment by the
+Determination Date, this Order will be deemed amended to remove Premium Support from the entire
+Subscription Term and Customer will not be charged or will receive a refund, as applicable for the fees
+corresponding to Premium Support.
+Purchase Order Information
+Is a Purchase Order (PO) required for the purchase or payment of the subscriptions on this Order Form? No
+PO Number:
+PO Amount: USD 0.00
+CloudShield Security, Inc. TechNova Solutions, Inc.
+_________________________ _________________________
+Signature Signature
+Name: _________________ Name: _________________
+Title: _________________ Title: _________________
+Date: _________________ Date: _________________
+Exhibit A - Billable Unit Definitions
+CloudShield Enterprise
+• 1 virtual machine = 1 billable unit
+• 1 container host = 1 billable unit
+• 50 serverless functions = 1 billable unit
+• 10 serverless containers = 1 billable unit
+• 10 asset metadata = 1 billable unit
+CloudShield Code
+1 active developer = 10 billable units
+CloudShield Sensor
+• 1 VM Sensor deployed for 24 hours = 1 billable unit
+• 1 Kubernetes Sensor deployed for 24 hours = 1 billable unit
+• 10 Serverless Container Sensor deployed for 24 hours = 1 billable unit
+CloudShield Data Security
+• 100 buckets scanned = 1 billable unit
+• 2 PaaS databases scanned = 1 billable unit
+• 10 data warehouse tables scanned = 1 billable unit
+• 30 non-OS disks scanned = 1 billable unit
+• 300 container images stored in the registry scanned = 1 billable unit
