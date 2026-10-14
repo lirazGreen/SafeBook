@@ -25,16 +25,16 @@ Total fee: $152,500
 Prices shown above do not include any taxes that may apply. Any such taxes are the responsibility of the customer.
 This is not an invoice.
 Special Terms
-1. 2. During each consecutive 24 months of the Subscription Term described in this Order, Customer shall have
+1. During each consecutive 24 months of the Subscription Term described in this Order, Customer shall have
 the right to utilize up to 5% more Billable Units in connection with SaaS subscription than those listed in the
 table above (the “Burst Threshold”), at no additional cost.
-Customer will be assigned a Customer Support Manager and Product Architect
+2. Customer will be assigned a Customer Support Manager and Product Architect
 Acme Appsoft Inc
 Signature:
-Signature:
 Name: John Smith
-Name: Bob Lee
 Title: CFO
-Title: CEO
 Date: 12-13-2024
+Signature:
+Name: Bob Lee
+Title: CEO
 Date: 01-02-2025

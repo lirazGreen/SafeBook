@@ -1,0 +1,42 @@
+Purchase Order – BrightOps Analytics Ltd.
+Purchase Order Number: PO-BO-10458
+PO Date: 02-15-2025
+Vendor
+Vendor Name: DataPulse Software Inc.
+Vendor Address:
+789 Market Street
+San Francisco, CA 94103, USA
+Buyer
+Company Name: BrightOps Analytics Ltd.
+Billing Address:
+42 King George Street
+London, UK
+Order Summary
+● Contract Start Date: 03-01-2025
+● Contract End Date: 02-28-2027
+● Billing Frequency: Annual
+● Payment Terms: Net 30
+Line Items
+Product Name Start Date End Date Unit
+Price
+Quantity Total
+Amount
+Analytics Platform –
+Enterprise
+03-01-2025 02-28-2026 $72,000 1 $72,000
+Analytics Platform –
+Enterprise
+03-01-2026 02-28-2027 $78,000 1 $78,000
+Premium Support 03-01-2025 02-28-2026 $6,000 1 $6,000
+Premium Support 03-01-2026 02-28-2027 $6,000 1 $6,000
+Total PO Amount: $162,000 USD
+Special Terms
+● Burst (Item Level): Buyer may exceed licensed analytics usage by up to 10% per
+contract year at no additional cost.
+● Technical Account Manager: A dedicated Technical Account Manager will be assigned
+for the duration of the contract.
+Authorization
+Buyer Signature: ✔ Signed
+Name: Emily Carter
+Title: VP Finance
+Date: 02-15-2025

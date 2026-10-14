@@ -1,0 +1,39 @@
+Purchase Order – NovaFleet Technologies Inc.
+Purchase Order Number: PO-NF-88219
+PO Date: 01-10-2025
+Vendor
+Vendor Name: SecureCloud Systems LLC
+Vendor Address:
+1550 Innovation Way
+Seattle, WA 98109, USA
+Buyer
+Company Name: NovaFleet Technologies Inc.
+Billing Address:
+900 Enterprise Drive
+Toronto, ON M5G 2C3
+Canada
+Order Summary
+● Contract Start Date: 02-01-2025
+● Contract End Date: 01-31-2028
+● Billing Frequency: Annual
+● Payment Terms: Net 45
+Line Items
+Product Name Start Date End Date Unit Price Quantity Total
+Amount
+Cloud Security Suite 02-01-2025 01-31-2026 $120,000 1 $120,000
+Cloud Security Suite 02-01-2026 01-31-2027 $132,000 1 $132,000
+Cloud Security Suite 02-01-2027 01-31-2028 $145,000 1 $145,000
+Advanced Threat
+Monitoring
+02-01-2025 01-31-2028 $18,000 3 $54,000
+Total PO Amount: $451,000 USD
+Special Terms
+● Burst (Item Level): Up to 15% additional monitored workloads allowed annually
+without charge.
+● Technical Account Manager: Vendor will assign a Senior Technical Account Manager
+and conduct quarterly architecture reviews.
+Authorization
+Buyer Signature: ✔ Signed
+Name: Daniel Wong
+Title: Chief Financial Officer
+Date: 01-10-2025
