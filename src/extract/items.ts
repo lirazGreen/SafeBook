@@ -62,12 +62,15 @@ function resolveHeader(
 
 export function mapItems(
   table: TableResult,
+  // undefined is accepted explicitly: callers pass profile values straight
+  // through, and under exactOptionalPropertyTypes an absent profile key is
+  // undefined rather than a missing property.
   options: {
-    columnSynonyms?: Record<string, string[]>;
-    optionalColumns?: Record<string, string[]>;
-    carryDownFields?: string[];
-    dateFormat?: DateFormat;
-    documentCurrency?: string | null;
+    columnSynonyms?: Record<string, string[]> | undefined;
+    optionalColumns?: Record<string, string[]> | undefined;
+    carryDownFields?: string[] | undefined;
+    dateFormat?: DateFormat | undefined;
+    documentCurrency?: string | null | undefined;
   } = {},
 ): ItemMappingResult {
   const synonyms = options.columnSynonyms ?? {};
