@@ -16,7 +16,7 @@
     "accuracy": "tsx accuracy/score.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.70.0",
+    "@anthropic-ai/sdk": "^0.133.0",
     "express": "^4.21.2",
     "pdfjs-dist": "^4.10.38",
     "pg": "^8.13.1",

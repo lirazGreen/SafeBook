@@ -1245,6 +1245,55 @@ Three consequences:
 Covered by `tests/unit/escalation.test.ts`, including that `escalate` is asserted **not
 called** for the POs.
 
+## Escalation modes (phase 5)
+
+Four modes, because two distinct things were briefly conflated.
+
+| `LLM_MODE` | Escalator | Key | Behaviour |
+|---|---|---|---|
+| `off` **(default)** | `null` | no | A failed rule is flagged `FIELD_NOT_FOUND` and the document still persists. **This is how the service behaves with no key** — lower recall on prose, no failures |
+| `fixture` | replay only | no | Replays recorded responses; **a miss is a hard error**. For tests and `npm run accuracy` |
+| `live` | calls Claude | yes | The real service path |
+| `record` | calls + writes | yes | Run once to refresh `tests/fixtures/llm/` |
+
+`off` and `fixture` were the same mode at first, which was wrong: a reviewer dropping a PDF
+into `inbox/` would have hit a hard fixture miss instead of the graceful degradation the design
+promises. `live`/`record` without a key refuse to start and name the fix.
+
+### Fixtures are a testing artifact, not a service path
+
+A fixture's key hashes the **input text**, so a genuinely new document can only ever *miss*.
+Fixtures cannot serve production even in principle — the service runs `live`.
+
+**The key is `sha(field, model, sha(instruction), input)`, deliberately not the field name.**
+Keying on the field alone would replay an OLD response against a CHANGED prompt: tests would
+pass while live behaviour differed, and the printed accuracy number would describe a prompt that
+no longer exists. A prompt edit therefore misses and must be re-recorded.
+
+A miss is an **error**, never a silent fallthrough — which would either turn an offline run into
+a billed one, or hide prompt drift behind passing tests.
+
+### No fixtures exist yet, and that is correct
+
+`accuracy/expected/` holds only the two POs, and **neither escalates** — so `npm test` and
+`npm run accuracy` pass in `fixture` mode with an empty fixture directory. Writing hand-made
+fixtures now would mean guessing Claude's output for documents not yet in scope. They get
+recorded in phase 6, when Acme enters the scored set.
+
+A test asserts the directory is empty; if it ever fails, a PO has started escalating, which is a
+finding rather than something to paper over with a fixture.
+
+### SDK notes
+
+The installed SDK was `0.70.1`, which has no `messages.parse`, no `output_config` and no zod
+helper — the structured-output API needed `0.133.0`. Also: `zodOutputFormat` takes a **zod v4**
+schema, so `src/llm/schemas.ts` imports from `zod/v4` while `src/profiles/schema.ts` stays on
+v3 (nothing hands it to the SDK). The two coexist deliberately rather than by accident.
+
+And confirming from the SDK reference rather than memory: **no `temperature`** — it is removed
+on this model family and returns a 400. Determinism comes from the fixture cache. `stop_reason`
+is checked for `'refusal'` before reading content, and `fallbacks: 'default'` is enabled.
+
 ## LLM extraction contract
 
 Model **`claude-opus-5`** (id in config so the accuracy harness can compare). Verified against

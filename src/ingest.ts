@@ -7,6 +7,7 @@ import { runExtraction } from './extract/pipeline.ts';
 import { parsePdf } from './pdf/parse.ts';
 import { loadCustomers, type DocType } from './profiles/loader.ts';
 import type { ProfileDefinition } from './profiles/schema.ts';
+import { buildEscalator } from './llm/client.ts';
 import { sha256, storage } from './storage/index.ts';
 
 const PDF_MAGIC = '%PDF-';
@@ -88,12 +89,17 @@ export async function ingestFile(
     return { profileId: row.id, definition: row.definition };
   };
 
+  // Built per document, because the escalator needs this document's text to
+  // slice sections from and to resolve evidence against. Returns null when
+  // LLM_MODE=off, in which case a failed rule is flagged rather than escalated.
+  const escalate = buildEscalator({ rawText: parsed.rawText });
+
   const result = await runExtraction({
     parsed,
     customers: customerRows,
     patterns,
     resolveProfile,
-    escalate: null, // phase 6 wires Claude in behind this
+    escalate,
   });
 
   const persisted = await persistExtraction({
@@ -101,7 +107,7 @@ export async function ingestFile(
     result,
     profileId: usedProfileId,
     trigger: 'ingest',
-    engine: { pdf: 'pdfjs-dist@4.10', llm: null },
+    engine: { pdf: 'pdfjs-dist@4.10', llm: escalate === null ? null : 'claude' },
   });
 
   return { documentId, status: 'created', extractionStatus: persisted.status, runId: persisted.runId };

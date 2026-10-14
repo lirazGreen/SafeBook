@@ -17,10 +17,22 @@ const Env = z.object({
   MAX_UPLOAD_BYTES: z.coerce.number().int().positive().default(25 * 1024 * 1024),
 
   ANTHROPIC_API_KEY: z.string().optional(),
-  // fixture: replay committed responses (tests run offline and deterministically)
-  // record:  call the API and write fixtures
-  // live:    call the API, write nothing
-  LLM_MODE: z.enum(['fixture', 'record', 'live']).default('fixture'),
+  /**
+   * off      no escalator is wired. A field whose deterministic rule fails is
+   *          flagged FIELD_NOT_FOUND and the document still persists. This is
+   *          how the SERVICE behaves with no API key: lower recall on prose
+   *          fields, no failures.
+   * fixture  replay committed responses; a MISS IS AN ERROR. For tests and the
+   *          accuracy harness, where a silent fallthrough would either turn an
+   *          offline run into a billed one or hide prompt drift.
+   * record   call the API and write each exchange to tests/fixtures/llm/.
+   * live     call the API, write nothing. The real service path.
+   *
+   * 'fixture' and 'off' were briefly the same mode, which was wrong: a reviewer
+   * dropping a PDF into inbox/ would have hit a hard fixture miss instead of the
+   * documented graceful degradation.
+   */
+  LLM_MODE: z.enum(['off', 'fixture', 'record', 'live']).default('off'),
   LLM_MODEL: z.string().default('claude-opus-5'),
 });
 
@@ -33,8 +45,11 @@ function load() {
     throw new Error(`Invalid environment:\n${issues}\n\nCopy .env.example to .env.`);
   }
   const env = parsed.data;
-  if (env.LLM_MODE !== 'fixture' && !env.ANTHROPIC_API_KEY) {
-    throw new Error(`LLM_MODE="${env.LLM_MODE}" requires ANTHROPIC_API_KEY.`);
+  if ((env.LLM_MODE === 'record' || env.LLM_MODE === 'live') && !env.ANTHROPIC_API_KEY) {
+    throw new Error(
+      `LLM_MODE="${env.LLM_MODE}" requires ANTHROPIC_API_KEY. ` +
+        `Use LLM_MODE=off to run deterministic-only with no key.`,
+    );
   }
   return env;
 }
