@@ -155,6 +155,51 @@ If still unresolved → `status='needs_classification'`, no extraction attempted
 definitions are per doc type, so there is nothing meaningful to extract), correctable via
 the same `PATCH` + reprocess path as a customer reassignment.
 
+## Inferring the issuer: "who sent this", not "what did we register"
+
+Match patterns alone answer the wrong question. They find a customer we already
+configured; they cannot tell us who issued a document from a customer nobody has
+registered — which is the case the design claims to handle, and the case where an
+accurate `detected_issuer_name` matters most.
+
+So the issuer is **inferred from content with no per-customer configuration**, and the method
+differs by document type because the issuer's ROLE inverts:
+
+| Doc type | Issuer is the | How it is found | Config needed |
+|---|---|---|---|
+| Purchase Order | **buyer** | the title `Purchase Order – X` **and** `Company Name:` under the `Buyer` heading — two independent sources | none |
+| Order Form | **vendor** | the shared signature line **minus** the buyer | none |
+
+The order-form case is the hard one: **the vendor is never stated plainly.** Acme's name
+occurs exactly once in its whole document; CloudShield's is buried in legal preamble prose. But
+both parties share ONE signature line, and the buyer *is* stated plainly (`To:`,
+`Customer Billing Name:`). So the issuer is obtained by subtraction:
+
+```
+"Acme Appsoft Inc"                                    - "Appsoft Inc."             = "Acme"
+"CloudShield Security, Inc. TechNova Solutions, Inc." - "TechNova Solutions, Inc." = "CloudShield Security, Inc."
+```
+
+No geometry and no regex per customer. CloudShield is independently corroborated by its
+preamble (`by and between X, a company…`), giving two agreeing methods.
+
+**Subtraction must be positional, not token-based.** Both CloudShield and TechNova end in
+`Inc.`, so filtering by token set keeps both and yields `"CloudShield Security, Inc. Inc."`.
+Cutting the matched span out by offset — the same normalise-with-index-map technique as
+`llm/evidence.ts` — avoids that, with a final strip for the buyer's own trailing period, which
+falls outside the normalised span and otherwise survives as an orphan.
+
+**The inferred name is then matched to a registered customer by NORMALISED NAME** (casefold,
+drop punctuation), not by regex. Two consequences:
+
+- Registering a customer needs only their **name**. Explicit `match` patterns remain in
+  `customers.yaml` as a supplement for awkward cases, but they are no longer the only route.
+- An **unregistered** customer still produces an accurate `detected_issuer_name`, so a human
+  can register them from the record without opening the PDF.
+
+Covered by `tests/unit/inferIssuer.test.ts`, including that a PO's two sources agree, that the
+shared `Inc.` suffix is not duplicated, and that an unregistered issuer is still named.
+
 ## Pipeline
 
 ```
