@@ -15,10 +15,8 @@ fields:
 ignore_sections: ["Purchase Order Information"]
 
 items:
-  header_rows: 2                       # headers wrap over two lines
   carry_down: [subscription_year]      # sparse column: blank rows inherit from above
   date_format: slash_mdy               # "3/1/2025" — declared, so not flagged ambiguous
-  wrapped_cells: true
   reconcile: quantity * unit_price * order_term_months   # priced monthly
   tolerance_pct: 0.5                   # unit price rounded to 2dp per the document
   optional_columns:

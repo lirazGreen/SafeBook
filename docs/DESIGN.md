@@ -148,7 +148,9 @@ Classification signals, weighted and **position-aware** (the page-1 title region
 Information` with `PO Number:` and `PO Amount: USD 0.00`. A substring match on "purchase
 order" misclassifies it, and a naive `amount` lookup picks up `USD 0.00`. Two defences:
 position weighting (its actual title is `ORDER FORM`) decides classification, and the
-profile's `ignore_sections` excludes that block during **extraction**.
+profile's `ignore_sections` will exclude that block during **extraction** — ⚠️ *declared but
+not yet applied; phase 7. Evidence it is still needed: CloudShield currently extracts
+`po_amount: "USD 0.00"` from that block.*
 
 When `|score_order − score_po| < 3` or both scores `< 4`, Claude arbitrates on page-1 text.
 If still unresolved → `status='needs_classification'`, no extraction attempted (field
@@ -1832,6 +1834,26 @@ every item column, and each special term — 48 per purchase order. Two delibera
 `reviewReasons == []`, so the KPI breaks the build rather than only printing badly. It also
 asserts `llmCalls === 0` for every purchase order, which keeps the "the rules already parse"
 claim honest rather than incidental.
+
+## Profile keys declared but not yet applied
+
+Tracked explicitly, because a key that silently does nothing is worse than a missing one — it
+reads as working.
+
+| Key | Owner phase | Evidence it is still needed |
+|---|---|---|
+| `ignore_sections` | 7 | CloudShield extracts `po_amount: "USD 0.00"` from its own "Purchase Order Information" block |
+| `optional_fields` | 6–7 | CloudShield's `marketplace` and billing contacts are never captured |
+| `two_column_signature` | 6 | both order forms report `signature_present: null`, which escalates |
+| `placeholder_lines` | 7 | CloudShield's blank `Name: ____` lines should resolve to **false**, not null |
+
+A declared-but-unimplemented *strategy* returns `null` and escalates rather than falling
+through to a plain label lookup — see the bug it caused above.
+
+**Two keys were deleted rather than implemented.** `header_rows` and `wrapped_cells` were
+declared early and never read: the reconstruction detects the header block and joins wrapped
+cells from the geometry itself, so both were no-op knobs. The schema now *rejects* them, so
+setting one fails loudly instead of being accepted and ignored.
 
 ## Implementation phases
 

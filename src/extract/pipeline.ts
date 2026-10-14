@@ -89,6 +89,12 @@ export interface PipelineInput {
 
 const str = (v: { text: string } | null) => v?.text ?? null;
 
+/** Parses a date honouring either `input_format` or `input_formats`. */
+const dateFrom = (
+  text: string,
+  spec: { input_format?: DateFormat | undefined; input_formats?: DateFormat[] | undefined } | undefined,
+) => parseDate(text, spec?.input_format, spec?.input_formats)?.iso ?? null;
+
 export async function runExtraction(input: PipelineInput): Promise<ExtractionResult> {
   const { rawText, pages } = input.parsed;
   const trace: Record<string, FieldTrace> = {};
@@ -147,8 +153,8 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
 
   const startRaw = labelValue(rawText, labelsOf('start_date'));
   const endRaw = labelValue(rawText, labelsOf('end_date'));
-  const startDate = startRaw ? parseDate(startRaw.text, field('start_date')?.input_format)?.iso ?? null : null;
-  const endDate = endRaw ? parseDate(endRaw.text, field('end_date')?.input_format)?.iso ?? null : null;
+  const startDate = startRaw ? dateFrom(startRaw.text, field('start_date')) : null;
+  const endDate = endRaw ? dateFrom(endRaw.text, field('end_date')) : null;
   record('start_date', startDate, startDate ? 'rule' : null, startRaw);
   record('end_date', endDate, endDate ? 'rule' : null, endRaw);
 
@@ -233,7 +239,7 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
       signaturePresent: sig?.value ?? null,
       signerName: str(pick('signer_name')),
       signerTitle: str(pick('signer_title')),
-      signatureDate: sigDateRaw ? parseDate(sigDateRaw.text, dateSpec?.input_format)?.iso ?? null : null,
+      signatureDate: sigDateRaw ? dateFrom(sigDateRaw.text, dateSpec) : null,
     };
   });
 
@@ -242,8 +248,8 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
   for (const [name, spec] of Object.entries(def.type_fields ?? {})) {
     const found = labelValue(rawText, spec.labels ?? []);
     if (found === null) { typeDetails[name] = null; continue; }
-    typeDetails[name] = spec.input_format
-      ? parseDate(found.text, spec.input_format)?.iso ?? null
+    typeDetails[name] = (spec.input_format !== undefined || spec.input_formats !== undefined)
+      ? dateFrom(found.text, spec)
       : found.text;
     record(`type.${name}`, typeDetails[name], 'rule', found);
   }

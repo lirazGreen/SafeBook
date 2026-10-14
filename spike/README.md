@@ -40,3 +40,20 @@ the first page only — a case the design had not considered at all.
 `pdfjs-dist@4.10` prints `process.getBuiltinModule is not a function` warnings
 on Node 18. Harmless for text extraction, and they disappear on the Node 22 the
 project targets (see `docs/DEPENDENCIES.md`).
+
+## Inspection tools kept from later phases
+
+Beyond the phase-0 table verification, these were useful enough to keep:
+
+```bash
+npx tsx spike/check-pipeline.ts "<file.pdf>"   # full extraction for one document
+npx tsx spike/escalations.ts                   # which fields fail their rule, per document
+npx tsx spike/audit-profiles.ts                # compare the two base profiles section by section
+npx tsx spike/check-items.ts                   # item column mapping
+npx tsx spike/check-resolve.ts                 # classification + issuer resolution
+npx tsx spike/check-infer.ts                   # generic issuer inference
+```
+
+`audit-profiles.ts` earns its place: it found that the order-form base profile declared no
+`parties` and no `type_fields`, which would have silently produced no buyer, vendor, address,
+signature or quote number on both order forms.

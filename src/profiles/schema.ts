@@ -55,8 +55,10 @@ const ItemsSpec = z
     /** Table geometry overrides — defaults adapt to the table itself. */
     column_gap_pt: z.number().positive().optional(),
     anchor_column_ratio: z.number().positive().max(1).optional(),
-    header_rows: z.number().int().positive().max(5).optional(),
-    wrapped_cells: z.boolean().optional(),
+    // NOTE: no header_rows / wrapped_cells. Both were declared early and never
+    // read: the reconstruction detects the header block and joins wrapped cells
+    // from the geometry itself. A knob that silently does nothing is a trap, so
+    // the schema rejects them rather than accepting and ignoring them.
   })
   .strict();
 

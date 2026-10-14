@@ -77,3 +77,16 @@ describe('item mapping via profile column synonyms', () => {
     expect(r.unmappedHeaders).toEqual(['Mystery Column']);
   });
 });
+
+describe('dead profile keys are rejected, not silently ignored', () => {
+  it('refuses header_rows and wrapped_cells', async () => {
+    const { ProfileDefinition } = await import('../../src/profiles/schema.ts');
+    // Both were declared early and never read: the reconstruction finds the
+    // header block and joins wrapped cells from the geometry. A no-op knob reads
+    // as working, so the schema rejects it.
+    expect(ProfileDefinition.safeParse({ items: { header_rows: 2 } }).success).toBe(false);
+    expect(ProfileDefinition.safeParse({ items: { wrapped_cells: true } }).success).toBe(false);
+    // the geometry overrides that ARE applied remain accepted
+    expect(ProfileDefinition.safeParse({ items: { column_gap_pt: 5 } }).success).toBe(true);
+  });
+});

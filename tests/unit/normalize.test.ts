@@ -106,3 +106,22 @@ describe('net terms — deterministic only, prose is left to escalate', () => {
     expect(parseNetTerms("within forty-five (45) days of Customer's receipt")).toBeNull();
   });
 });
+
+describe('input_formats (plural): a candidate set, not a single declaration', () => {
+  it('parses with any listed candidate', () => {
+    // Acme's quote dates are long_month; its item dates are short_month_compact.
+    // A profile often knows the SET without knowing which applies per field.
+    const candidates = ['long_month', 'slash_mdy'] as const;
+    expect(parseDate('May 12, 2025', undefined, [...candidates])?.iso).toBe('2025-05-12');
+    expect(parseDate('1/20/2025', undefined, [...candidates])?.iso).toBe('2025-01-20');
+  });
+
+  it('removes the ambiguity flag, because no listed format reads it two ways', () => {
+    expect(parseDate('3/1/2025')?.ambiguous).toBe(true);                       // undeclared
+    expect(parseDate('3/1/2025', undefined, ['slash_mdy'])?.ambiguous).toBe(false);
+  });
+
+  it('returns null when none of the candidates match', () => {
+    expect(parseDate('2025-03-01', undefined, ['long_month', 'dash_mdy'])).toBeNull();
+  });
+});

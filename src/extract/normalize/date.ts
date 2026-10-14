@@ -53,9 +53,25 @@ const iso = (y: number, m: number, d: number) =>
  * `ambiguous`, because `3/1/2025` could be 1 March or 3 January and guessing
  * would silently shift every date in the document.
  */
-export function parseDate(raw: string, format?: DateFormat): ParsedDate | null {
+export function parseDate(
+  raw: string,
+  format?: DateFormat | undefined,
+  /**
+   * Candidate formats when no single one is declared. A profile often knows the
+   * SET a customer uses without knowing which applies to a given field — Acme's
+   * document dates are long_month while its item dates are short_month_compact.
+   * Narrowing the candidates still removes the ambiguity flag, because none of
+   * the listed formats can read the same string two ways.
+   */
+  formatCandidates?: DateFormat[] | undefined,
+): ParsedDate | null {
   const text = raw.trim();
-  const formats: DateFormat[] = format ? [format] : (Object.keys(PATTERNS) as DateFormat[]);
+  const declared = format !== undefined || (formatCandidates !== undefined && formatCandidates.length > 0);
+  const formats: DateFormat[] = format
+    ? [format]
+    : formatCandidates !== undefined && formatCandidates.length > 0
+      ? formatCandidates
+      : (Object.keys(PATTERNS) as DateFormat[]);
 
   for (const f of formats) {
     const m = PATTERNS[f].exec(text);
@@ -74,7 +90,7 @@ export function parseDate(raw: string, format?: DateFormat): ParsedDate | null {
     const b = Number(m[2]);
     const year = Number(m[3]);
     // declared format => trust it; otherwise flag the genuinely ambiguous case
-    const ambiguous = format === undefined && a <= 12 && b <= 12 && a !== b;
+    const ambiguous = !declared && a <= 12 && b <= 12 && a !== b;
     if (!valid(year, a, b)) return null;
     return { iso: iso(year, a, b), ambiguous };
   }
