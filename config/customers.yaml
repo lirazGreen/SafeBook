@@ -1,28 +1,31 @@
 # SafeBook's customers — the ISSUER of each document.
 #
 # Declared ONCE here, independent of document type, because match patterns
-# identify a *customer*, not a (customer, doc_type) pair. A customer that issues
+# identify a *customer*, not a (customer, doc_type) pair. A customer issuing
 # both order forms and purchase orders therefore has one entry here and one
 # profile file per type, with nothing duplicated.
 #
-# This file seeds `customers` and `customer_match_patterns`.
-# `npm run seed` is non-destructive: it never overwrites a profile version that
-# came from the API.
+# This file is the single source of truth; `npm run seed` projects it into the
+# `customers` and `customer_match_patterns` tables. Nothing else writes them.
 #
-# match.kind:
-#   text            - search the whole document text
-#   signature_block - search only the signature block
-#   doc_id          - match a document-identifier pattern (PO number, quote number)
+# match.kind scopes the search:
+#   text            - the whole document
+#   signature_block - the signature block only
+#   doc_id          - the document-identifier lines (PO number, quote number)
 # Patterns are regex sources, compiled at load time so a broken one fails loudly.
 
 customers:
   - slug: acme
     name: Acme
     match:
-      # "Acme" appears exactly ONCE in its entire document — in the signature
-      # block. A whole-text search would be too weak to rely on, and its brand
-      # is otherwise only in an embedded logo image.
-      - { kind: signature_block, pattern: '^Acme$' }
+      # "Acme" occurs exactly ONCE in its entire document, in the signature
+      # block, and its brand is otherwise only inside an embedded logo image —
+      # so a whole-text search would be too weak to rely on.
+      #
+      # Anchored to the START of the line rather than the whole line: the two
+      # signature columns collapse into one line of text, "Acme Appsoft Inc",
+      # and the ISSUER's name leads. A '^Acme$' pattern matched nothing.
+      - { kind: signature_block, pattern: '^Acme\b' }
 
   - slug: cloudshield
     name: CloudShield Security, Inc.
