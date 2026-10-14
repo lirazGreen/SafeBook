@@ -116,3 +116,23 @@ describe('an escalated value must survive both evidence checks', () => {
     expect(out.reviewReason).toBe('VALUE_NOT_IN_EVIDENCE');
   });
 });
+
+describe('the escalatable set matches what the strategies actually need', () => {
+  it('includes signature presence, because signatureMarker returns null to escalate', async () => {
+    const { ESCALATABLE_FIELDS } = await import('../../src/extract/engine.ts');
+    const { signatureMarker } = await import('../../src/extract/strategies/locate.ts');
+    const acmeText = readFileSync('tests/fixtures/text/acme.txt', 'utf8');
+
+    // Acme has no "Buyer Signature:" label — it uses a two-column block
+    expect(signatureMarker(acmeText, ['Buyer Signature'])).toBeNull();
+    // ...so that null must have somewhere to go
+    expect(ESCALATABLE_FIELDS.has('buyer_signature_present')).toBe(true);
+  });
+
+  it('excludes the item table: geometry, self-checked by the reconciliation', async () => {
+    const { ESCALATABLE_FIELDS } = await import('../../src/extract/engine.ts');
+    for (const f of ['items', 'product_name', 'quantity', 'unit_price', 'total_amount']) {
+      expect(ESCALATABLE_FIELDS.has(f)).toBe(false);
+    }
+  });
+});

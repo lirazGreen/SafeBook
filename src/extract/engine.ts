@@ -103,4 +103,9 @@ export async function extractField<T>(args: ExtractFieldArgs<T>): Promise<FieldO
 export const ESCALATABLE_FIELDS = new Set([
   'start_date', 'end_date', 'amount', 'payment_terms_days',
   'billing_frequency', 'billing_address', 'special_terms', 'doc_type',
+  // Signature presence escalates too. signatureMarker returns NULL when it finds
+  // no marker at all — "we could not tell" rather than "it is unsigned" — and
+  // that null has to reach something. Acme has no "Buyer Signature:" label; its
+  // two-column block needs either a strategy (phase 5) or this escalation.
+  'buyer_signature_present', 'vendor_signature_present',
 ]);

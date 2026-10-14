@@ -846,11 +846,16 @@ Resolution precedence:
 Unambiguous symbols map directly (`€`→EUR, `£`→GBP, `¥`→JPY, `₪`→ILS) from a frozen
 `SYMBOL_TO_CODE` constant with an explicit `AMBIGUOUS_SYMBOLS` set.
 
-Other money details: strip thousand separators before parsing; `unit_price NUMERIC(18,4)` to
-hold CloudShield's `3.25` and `22916.67` (3.25 × 180,000 × 12 = 7,020,000.00 exactly, which
-only reconciles without float error); totals `NUMERIC(18,2)`. If a customer ever emits
-European number formatting (`1.234,56`), the profile gains a `number_locale` option rather
-than the parser guessing.
+Other money details: `unit_price NUMERIC(18,4)` holds CloudShield's `3.25` and `22916.67`
+(3.25 × 180,000 × 12 = 7,020,000.00 exactly, which only reconciles without float error);
+totals `NUMERIC(18,2)`. **Amounts are carried as decimal STRINGS, never JS numbers** — as a
+float, `22916.67` becomes `22916.669999999998`, and the whole point of NUMERIC is defeated if
+anything parses it on the way to the DB.
+
+**European number formatting is auto-detected rather than declared.** An earlier draft planned a
+`number_locale` profile option; the parser instead takes the LAST separator as the decimal point
+when its tail is 1–2 digits. So `$162,000` → `162000` and `EUR 1.234,56` → `1234.56` with no
+configuration — which matters because an unknown customer has nobody to declare a locale for it.
 
 **Raw forms are not duplicated into columns.** The original strings (`$162,000 USD`,
 `3/1/2025`) are kept as the evidence span in `extraction_runs.field_confidence`, reachable via
@@ -1057,6 +1062,44 @@ around:
 **The guiding property: partial extraction plus a review flag, never silent wrong data.**
 The reconciliation checks are what make that trustworthy — if reconstruction goes wrong,
 `Σ items == amount` breaks rather than producing a plausible-looking total.
+
+## Deterministic locators and traceability
+
+Phase 2 built the deterministic half. Two properties worth stating because they are easy to
+get wrong:
+
+**Locators return character offsets, not just values.** So a rule-sourced value is traceable
+exactly like an LLM-sourced one, and *"every stored value points back at document text"* has no
+exception for the deterministic path — `GET /documents/:id/trace` works uniformly.
+
+**The stored value and its evidence are deliberately different things.** A multi-line address
+is stored joined (`"789 Market Street, San Francisco, CA 94103, USA"`) while its evidence
+slices the document's original characters, newline included. Same split as dates, where a
+`DATE` is stored and `"03-01-2025"` is the evidence. (A test initially compared the two
+directly and failed, which is how the distinction got pinned down.)
+
+### Block boundaries: a named heading list, not a heuristic
+
+`multilineAfterLabel` has to know where an address block ends. Two attempts failed against the
+real text before the third worked:
+
+| Attempt | Result |
+|---|---|
+| Stop at a blank line or a `Label:` line | ✗ The vendor address swallowed `Buyer`; the billing address swallowed `Order Summary` |
+| Also stop at a short Title-Case line with no colon, comma or digit | ✗ **Truncated NovaFleet's buyer address** — `"Canada"` alone on a line is short, capitalised, comma-free and digit-free, i.e. indistinguishable from a heading by shape |
+| Stop at a **named** heading from `DEFAULT_SECTION_HEADINGS`, profile-overridable | ✓ |
+
+The lesson generalises: shape-based heuristics over document text tend to have a counterexample
+inside the documents themselves. A named list is overridable per profile, so an unfamiliar
+document can declare its own.
+
+### "Could not tell" is not "no"
+
+`signatureMarker` returns **null** when it finds no signature marker, rather than `false`.
+Acme has no `Buyer Signature:` label at all — it uses a two-column block — so defaulting to
+`false` would assert the contract is unsigned, which is a wrong answer rather than a missing
+one. The null escalates, which is why `buyer_signature_present` is in `ESCALATABLE_FIELDS`;
+a test asserts that pairing, since the two were briefly inconsistent.
 
 ## When does the LLM run?
 
@@ -1378,7 +1421,7 @@ Six layers, each catching what the others cannot:
 |---|---|---|
 | 1. HTTP input | `openapi.yaml` + `express-openapi-validator` | magic bytes `%PDF-` → `415`, size cap → `413`, `customerId` exists, slug format, **match patterns must compile as regexes** |
 | 2. Profile config | zod, at seed **and** at API insert | known strategy/format names, `extends` resolves, `default_currency` is valid ISO 4217, **strict mode rejects unknown keys** so `labells:` fails loudly instead of being ignored |
-| 3. Per-field output | `extract/validate.ts` | real calendar dates **within a plausible window** (1990–2050, configurable — `01-01-1900` is a valid date and a certain parse slip), `payment_terms_days` a positive integer (a term that isn't Net-shaped → `NULL` + flag), `quantity >= 0`, required-per-type (`quote_number` on order forms; `po_number` + `po_date` on POs) |
+| 3. Per-field output | `extract/validate.ts` | real calendar dates **within a plausible window** (`MIN_YEAR`/`MAX_YEAR` = 1990–2050, constants in `normalize/date.ts` — `01-01-1900` is a valid date and a certain parse slip). A plausibility guard, deliberately not per-customer config, `payment_terms_days` a positive integer (a term that isn't Net-shaped → `NULL` + flag), `quantity >= 0`, required-per-type (`quote_number` on order forms; `po_number` + `po_date` on POs) |
 | 4. Cross-field reconciliation | same | the money, term and date-envelope checks below |
 | 5. DB constraints | migrations | **formats and structure only** — see the policy below |
 | 6. Severity | job outcome | `warn` → persist + `needs_review` + a `review_reasons` code; `info` → run log only. **Validation never blocks persistence** |
