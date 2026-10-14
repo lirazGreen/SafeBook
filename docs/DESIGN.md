@@ -49,7 +49,7 @@ contains only the brief and `sample docs/`. No git repo yet.
 | Special terms | One `special_terms` table; `term_text` as received + parsed columns + `attributes` JSONB |
 | Definitions | **YAML in git is the single source of truth.** `npm run seed` projects it into versioned `extraction_profiles` rows; nothing else writes them. Rows exist because `extraction_runs.profile_id` needs an immutable target for the audit trail |
 | Profile storage | `definition` holds the **merged** result — the seeder resolves `extends: _base` once, so a row is self-contained and needs no re-merge to interpret |
-| LLM in tests | Recorded Claude responses committed as fixtures → tests run offline |
+| LLM in tests | `vi.fn()` mocks for plumbing, **recorded fixtures for the accuracy number** — a mock there would score the pipeline against our own invented Claude output. A setup file **refuses** `live`/`record` under Vitest, so offline is enforced, not merely true |
 | Model | **`claude-opus-5`**, id in config. No `temperature`/`budget_tokens` (both 400 on this model); depth via `output_config.effort` |
 | **When the LLM runs** | **Deterministic-first, escalate on failure.** Never declared per customer — a field tries its rule, and reaches Claude only if that yields nothing or fails to parse. Two of the four samples never escalate |
 | LLM calls | At most one per escalating section. The item table never escalates |
@@ -1283,6 +1283,48 @@ recorded in phase 6, when Acme enters the scored set.
 A test asserts the directory is empty; if it ever fails, a PO has started escalating, which is a
 finding rather than something to paper over with a fixture.
 
+### Mocks and fixtures do different jobs — and neither can call Claude
+
+The suite never reached the network even before this was enforced: every escalation test
+supplies its own `vi.fn()`, nothing imports `llm/client.ts`, and all tests pass with the network
+pointed at a dead address. But both halves are kept deliberately, because they prove different
+things:
+
+| | Proves |
+|---|---|
+| **`vi.fn()` mocks** (unit tests) | the **plumbing** — a hallucinated quote is rejected, a value not in its own quote is rejected, a refusal is handled, an explicit `null` doesn't crash |
+| **Recorded fixtures** (`npm run accuracy`) | the **extraction** — that Claude actually finds `30` in *"within thirty (30) days from invoice"* |
+
+Mocking the accuracy run would be the tempting shortcut, and is the one thing that must not
+happen: it would score the pipeline against output *we imagined* Claude producing. One could
+hand-write a mock returning the right answer for every field, print **100%**, and have the real
+model fail outright. Since ≥95% is a claim about the system, the number has to come from a real
+recorded response. A fixture is not a live call — it is a frozen one.
+
+**The guard makes it a rule rather than a convention.** `tests/setup/offlineLlm.ts` runs before
+any test file's module graph loads, so it pins `LLM_MODE` before `config/env.ts` reads it:
+
+- `live` and `record` are **refused**, loudly, naming `npm run accuracy` as the command that may
+  record. Silently rewriting them would hide the misconfiguration rather than report it.
+- everything else — including the `off` default — is **pinned to `fixture`**. Not merely
+  permitted: under `off` the escalator is `null`, so a prose field is flagged `FIELD_NOT_FOUND`
+  instead of replaying its recorded response. The accuracy number would quietly drop once the
+  order forms enter the scored set, with nothing naming the cause.
+
+The hole this closes is small but real: Vitest does **not** load `.env` into `process.env`
+(verified), so a committed `LLM_MODE=live` was never the risk — an **exported shell variable**
+was, and the documented recording command is one word away from it (`npm run accuracy` →
+`npm test`).
+
+One complementary check, because the mode guard cannot see a module that constructs its own
+client: a static assertion that `new Anthropic(` appears in exactly one file,
+`src/llm/client.ts` — the one the mode gates.
+
+⚠️ `npm run accuracy` itself runs under `tsx`, not Vitest, so it is **not** pinned — correctly,
+since `record` has to work there. It currently inherits the `off` default rather than `fixture`;
+harmless while only the POs are scored (neither escalates), and load-bearing in phase 7 when the
+order forms arrive.
+
 ### SDK notes
 
 The installed SDK was `0.70.1`, which has no `messages.parse`, no `output_config` and no zod
@@ -2115,7 +2157,7 @@ curl -s -F file=@"sample docs/ACME Order From.pdf" localhost:3000/documents   # 
 
 open localhost:3000/docs                    # Swagger UI — upload a PDF from the browser
 
-npm test            # offline, no API key — uses committed LLM fixtures
+npm test            # offline, no API key. LLM_MODE=live/record is REFUSED here
 npm run accuracy    # prints per-field + overall score vs accuracy/expected/
 npm run lint:api    # spectral lint openapi.yaml
 ```
