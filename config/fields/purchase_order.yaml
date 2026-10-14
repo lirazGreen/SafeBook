@@ -1,0 +1,39 @@
+# The brief's field set for a Purchase Order. This is the OUTPUT CONTRACT:
+# changing it changes DB columns, so it is code rather than runtime config.
+# Profiles say *where* and *in what format* these appear; this says what they are.
+doc_type: purchase_order
+
+document_fields:
+  start_date:              { type: date,    output: mm-dd-yyyy, required: true }
+  end_date:                { type: date,    output: mm-dd-yyyy, required: true }
+  amount:                  { type: money,   required: true }
+  payment_terms_days:      { type: integer, output: "Net {n}", required: true }
+  billing_frequency:       { type: string }
+
+party_fields:
+  buyer:
+    name:              { type: string, required: true }
+    address:           { type: string, required: true }   # the brief's "billing address"
+    signature_present: { type: boolean, required: true }  # the brief's "customer signature"
+    signer_name:       { type: string }
+    signer_title:      { type: string }
+    signature_date:    { type: date }
+  vendor:
+    name:    { type: string }
+    address: { type: string }
+
+type_fields:
+  po_number: { type: string }
+  po_date:   { type: date }
+
+item_fields:
+  product_name:    { type: string, required: true }
+  quantity:        { type: number }
+  unit_price:      { type: money }
+  total_amount:    { type: money }
+  item_start_date: { type: date }
+  item_end_date:   { type: date }
+
+special_term_types:
+  - burst                       # item-level per the brief
+  - technical_account_manager

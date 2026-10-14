@@ -1,0 +1,52 @@
+# The brief's field set for an Order Form. Identical to the Purchase Order set —
+# that is the point of the assignment: same nine fields, very different documents.
+# This is the OUTPUT CONTRACT: changing it changes DB columns, so it is code
+# rather than runtime config. Profiles say *where* and *in what format* these
+# appear; this file says what they are.
+doc_type: order_form
+
+document_fields:
+  start_date:              { type: date,    output: mm-dd-yyyy, required: true }
+  end_date:                { type: date,    output: mm-dd-yyyy, required: true }
+  amount:                  { type: money,   required: true }
+  payment_terms_days:      { type: integer, output: "Net {n}", required: true }
+  billing_frequency:       { type: string }
+
+party_fields:
+  buyer:
+    name:              { type: string, required: true }
+    address:           { type: string, required: true }   # the brief's "billing address"
+    signature_present: { type: boolean, required: true }  # the brief's "customer signature"
+    signer_name:       { type: string }
+    signer_title:      { type: string }
+    signature_date:    { type: date }
+  vendor:
+    name:              { type: string }
+    address:           { type: string }
+    signature_present: { type: boolean }   # order forms have TWO signature blocks
+    signer_name:       { type: string }
+    signer_title:      { type: string }
+    signature_date:    { type: date }
+
+type_fields:
+  quote_number:             { type: string }
+  quote_date:               { type: date }
+  quote_expiration_date:    { type: date }
+  proposed_by:              { type: string }
+  subscription_term_months: { type: number }
+  master_agreement_ref:     { type: string }
+  po_required:              { type: boolean }
+  po_number:                { type: string }
+  po_amount:                { type: money }
+
+item_fields:
+  product_name:    { type: string, required: true }
+  quantity:        { type: number }
+  unit_price:      { type: money }
+  total_amount:    { type: money }
+  item_start_date: { type: date }
+  item_end_date:   { type: date }
+
+special_term_types:
+  - burst                       # item-level per the brief
+  - technical_account_manager

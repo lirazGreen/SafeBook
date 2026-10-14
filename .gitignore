@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+*.log
+
+# runtime data directories (tracked as empty via .gitkeep)
+inbox/*
+archive/*
+failed/*
+!inbox/.gitkeep
+!archive/.gitkeep
+!failed/.gitkeep
+
+.DS_Store

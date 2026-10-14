@@ -1,0 +1,47 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: safebook
+      POSTGRES_PASSWORD: safebook
+      POSTGRES_DB: safebook
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U safebook -d safebook"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["node", "--import=tsx", "src/entrypoints/api.ts"]
+    environment:
+      DATABASE_URL: postgres://safebook:safebook@postgres:5432/safebook
+      PORT: "3000"
+    env_file: [.env]
+    ports: ["3000:3000"]
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./archive:/app/archive
+
+  worker:
+    build: { context: ., dockerfile: Dockerfile }
+    command: ["node", "--import=tsx", "src/entrypoints/worker.ts"]
+    environment:
+      DATABASE_URL: postgres://safebook:safebook@postgres:5432/safebook
+    env_file: [.env]
+    depends_on:
+      postgres: { condition: service_healthy }
+    volumes:
+      - ./src:/app/src
+      - ./config:/app/config
+      - ./inbox:/app/inbox
+      - ./archive:/app/archive
+      - ./failed:/app/failed
+
+volumes:
+  pgdata:
