@@ -30,6 +30,7 @@ contains only the brief and `sample docs/`. No git repo yet.
 | DB access | `pg` driver + hand-written SQL migrations, thin repository layer |
 | Language/scope | TypeScript; two entrypoints (`api` + `worker`) over one `src/` |
 | Job queue | Postgres `jobs` table, `FOR UPDATE SKIP LOCKED`. No Redis |
+| Mixed ingress | Folder poll and `POST /documents` are both normal paths. `documents.ingress` ('poll'/'upload') records which; dedupe is by `file_sha256` so the same bytes arriving both ways is one document, no second job |
 | Triggers | **In-process polling timer** in the worker + `POST /documents`. No `chokidar` — the assigner confirmed no file alerts exist, and polling also survives the folder being a cloud drive |
 | Optional fields | Profile-declared, stored in `attributes` JSONB on documents **and** items |
 | Original PDF | Local `archive/<sha256>.pdf` behind a `StorageAdapter`; S3 noted as the production choice |
@@ -246,6 +247,26 @@ Jobs are not 1:1 with files:
 
 Bulk reprocess fans out into **one job per document**, so each retries independently and
 progress is observable.
+
+### Mixing the two ingresses
+
+Folder polling and `POST /documents` are both expected in normal operation — a PDF can land
+in the synced folder *and* be uploaded by hand. Nothing special is needed:
+
+- **Profile resolution never asks how the file arrived.** It is `(customer_id, doc_type)`
+  either way, so the same customer and document type is handled identically.
+  (`extraction_profiles.source` is unrelated — that records where the *definition* came from.)
+- **Dedupe is by content, not ingress.** The same bytes arriving both ways is **one** document
+  and **one** job, so no second round of LLM calls. This works even though the two copies
+  almost certainly have different filenames — verified: `contract.pdf` from the folder and
+  `CloudShield Q4 signed.pdf` from the upload dedupe to a single row.
+- **`ON CONFLICT (file_sha256) DO NOTHING` is required, not optional.** A poll tick and an
+  upload can land the same bytes simultaneously; without it the loser raises a unique violation
+  and the upload returns 500 for what is really a successful no-op. It returns `200` with
+  `duplicate: true` instead — the same rule a re-dropped folder file follows.
+- **`documents.ingress`** records `'poll'` or `'upload'`, and is **not** overwritten on a
+  cross-ingress duplicate: the first arrival is the one that was actually processed. It answers
+  "why did this document appear?" and surfaces one path quietly failing while the other works.
 
 ### Attempt and retry policy
 
