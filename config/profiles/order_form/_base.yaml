@@ -20,6 +20,8 @@ fields:
 items:
   column_synonyms:
     product_name: ["Name", "Product Name", "Subscriptions", "Description"]
+    item_start_date: ["Start Date"]
+    item_end_date: ["End Date"]
     quantity:     ["Quantity", "Quantity of Billable Units"]
     unit_price:   ["Rate", "Unit Price", "Monthly / Unit Price"]
     total_amount: ["Total amount", "Total Amount", "Total Price"]
