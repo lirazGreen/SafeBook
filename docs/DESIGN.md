@@ -47,7 +47,8 @@ contains only the brief and `sample docs/`. No git repo yet.
 | Doc-type tables | One shared `documents` table + `order_form_details` / `purchase_order_details` 1:1 extensions |
 | Parties | `document_parties` keyed `(document_id, role)` — buyer and vendor symmetric. All four samples name both, with very different completeness (Acme's vendor has no address at all) |
 | Special terms | One `special_terms` table; `term_text` as received + parsed columns + `attributes` JSONB |
-| Definitions | YAML seeds in git; **DB is runtime truth**; API inserts new versions |
+| Definitions | **YAML in git is the single source of truth.** `npm run seed` projects it into versioned `extraction_profiles` rows; nothing else writes them. Rows exist because `extraction_runs.profile_id` needs an immutable target for the audit trail |
+| Profile storage | `definition` holds the **merged** result — the seeder resolves `extends: _base` once, so a row is self-contained and needs no re-merge to interpret |
 | LLM in tests | Recorded Claude responses committed as fixtures → tests run offline |
 | Model | **`claude-opus-5`**, id in config. No `temperature`/`budget_tokens` (both 400 on this model); depth via `output_config.effort` |
 | LLM calls | **One per section** — payment terms, special terms, + doc-type tiebreak when scores are close |
@@ -243,7 +244,7 @@ Jobs are not 1:1 with files:
 | `scan_inbox` | the polling timer, or `POST /scan` | one sweep of the inbox; enqueues an `ingest` per eligible file and records a summary in `jobs.result` |
 | `ingest` | a scan, or upload | full pipeline, first time |
 | `reextract` | profile change, `PATCH docType`/`customerId` | re-extracts from stored `raw_text` |
-| `reresolve_customer` | `POST /customers` | re-matches the `unmatched` backlog, chains `reextract` on a hit |
+| `reresolve_customer` | `npm run seed`, on a new/changed customer | re-matches the `unmatched` backlog, chains `reextract` on a hit |
 
 Bulk reprocess fans out into **one job per document**, so each retries independently and
 progress is observable.
@@ -255,7 +256,7 @@ in the synced folder *and* be uploaded by hand. Nothing special is needed:
 
 - **Profile resolution never asks how the file arrived.** It is `(customer_id, doc_type)`
   either way, so the same customer and document type is handled identically.
-  (`extraction_profiles.source` is unrelated — that records where the *definition* came from.)
+  (Profiles are not writable over HTTP at all — they come from YAML. See "One writer".)
 - **Dedupe is by content, not ingress.** The same bytes arriving both ways is **one** document
   and **one** job, so no second round of LLM calls. This works even though the two copies
   almost certainly have different filenames — verified: `contract.pdf` from the folder and
@@ -299,7 +300,6 @@ CREATE TYPE doc_type            AS ENUM ('order_form','purchase_order');
 CREATE TYPE customer_resolution AS ENUM ('matched','ambiguous','unmatched','manual');
 CREATE TYPE document_status     AS ENUM ('received','parsed','needs_classification',
                                          'extracted','needs_review','failed');
-CREATE TYPE profile_source      AS ENUM ('seed','api');
 
 CREATE TABLE customers (
   id         BIGSERIAL PRIMARY KEY,
@@ -327,8 +327,7 @@ CREATE TABLE extraction_profiles (
   doc_type     doc_type NOT NULL,
   version      INT NOT NULL,
   definition   JSONB NOT NULL,
-  content_hash TEXT NOT NULL,
-  source       profile_source NOT NULL,
+  content_hash TEXT NOT NULL,            -- lets the seeder tell whether the YAML changed
   is_active    BOOLEAN NOT NULL DEFAULT FALSE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -746,20 +745,40 @@ files that could then drift apart. The DB already reflects this: patterns hang o
 Adding a customer that issues both types is therefore one `customers.yaml` entry plus two
 small profile files, with nothing repeated.
 
-### YAML ↔ DB precedence
+### One writer: YAML → DB
 
-- Pipeline reads profiles **only from the DB**; YAML is never consulted at extraction time.
-- `npm run seed`: a YAML whose `content_hash` differs inserts `version+1`, but it becomes
-  `is_active` **only if the currently active version's `source = 'seed'`**. An API-authored
-  fix is never silently undone by a deploy; the seed version lands inactive and flagged.
-- `npm run profiles:export` writes active DB profiles back to YAML, so a runtime fix can be
-  committed to git instead of drifting away from the repo.
+The DB is not a second source of truth, it is a **projection**. Same relationship as source
+code to a build artifact:
+
+- `npm run seed` is the **only** writer of `extraction_profiles`. A YAML whose
+  `content_hash` differs inserts `version+1` and activates it. No precedence rule is needed,
+  because nothing competes.
+- The pipeline reads **only** the DB, never YAML — so a profile change takes effect on
+  `seed`, not on file save.
+- Rows must still exist and be versioned: `extraction_runs.profile_id` has to point at an
+  immutable record of the rules that produced each value. That requirement is independent of
+  who writes them.
+- `definition` stores the **merged** definition. The seeder resolves `extends: _base` once,
+  so a row is self-contained — the audit never needs a second `base_profile_id` or a re-merge
+  that might behave differently later. Editing `_base.yaml` therefore inserts a new version
+  for every customer, which makes the blast radius visible rather than silent.
+
+**Why not keep the config only in the DB?** Because the four customers' configuration has to
+live in the repo in *some* form, or a fresh clone yields a service that does nothing until
+someone makes a dozen API calls by hand. YAML is the most reviewable form of that bootstrap —
+and the per-customer customisation is exactly what a reader of this repo wants to see.
+
+**Why no `POST /customers/:slug/profiles`?** An earlier draft had one, plus a `source`
+column and a `profiles:export` command to reconcile the resulting drift. All of that
+machinery existed only to manage a *second writer* — remove the writer and it all goes. The
+cost is that fixing a broken label means editing YAML and re-seeding rather than one HTTP
+call; for a four-customer system with no ops team that is the right trade.
 
 ### Drift flow — CloudShield renames "Total Subscription Fee" → "Total Contract Fee"
 
 1. Next PDF: issuer still matches, `amount` null → `status='needs_review'`.
 2. `extraction_runs` shows profile v2, `amount` null, `detected_issuer_name` present.
-3. `POST /customers/cloudshield/profiles` adds the label → **v3**, active. No deploy.
+3. Add the label to `config/profiles/order_form/cloudshield.yaml`; `npm run seed` inserts **v3** and activates it.
 4. `POST /documents/reprocess?customer=cloudshield&status=needs_review` → re-extracts from
    stored `raw_text`.
 5. Audit shows v2 → null, v3 → `23,640,000.00`. Nothing overwritten.
@@ -1168,17 +1187,17 @@ every affected document rather than one.
 ### Correct many — the real fix
 
 ```
-POST  /customers            { slug, name, matchPatterns[] }
-                            → re-resolves the entire `unmatched` backlog
-POST  /customers/:slug/patterns                add a pattern to an existing customer
-POST  /customers/:slug/profiles  { docType, definition } → inserts version+1, activates
 POST  /documents/reprocess?customer=&status=&profileVersion=
+
+Customers and profiles are **not** writable over HTTP — they come from YAML. Registering a
+new customer is: edit `config/customers.yaml` → `npm run seed`, which enqueues
+`reresolve_customer` so the `unmatched` backlog re-resolves against the new patterns.
 ```
 
 `PATCH` is the one-off escape hatch; registering the customer is the fix that scales. For an
 unknown issuer the flow is: `GET /documents?resolution=unmatched` → read
 `detected_issuer_name` → either `PATCH` that one document (and add a pattern so it stops
-recurring), or `POST /customers`, which repairs the whole backlog at once.
+recurring), or add them to `config/customers.yaml` and re-seed, which repairs the whole backlog at once.
 
 ### Inspect
 
@@ -1203,7 +1222,7 @@ GET /customers/:slug/profiles   version history
   responses against the spec. A handler returning an undeclared field fails the test suite, so
   the hand-written spec cannot silently drift from behaviour.
 - **Linted in CI** (`spectral lint openapi.yaml`) to catch a malformed spec before it ships.
-- A **contract test** exercises all 19 endpoints against the spec.
+- A **contract test** exercises all 16 endpoints against the spec.
 - Every endpoint carries a worked example taken from the four real samples — the `207`
   multi-status batch response, CloudShield's `trace` output with real offsets, the
   unmatched-issuer `PATCH` flow.
@@ -1598,8 +1617,8 @@ End-to-end behaviours to demonstrate:
   `USD 0.00` from the `Purchase Order Information` block.
 - **Unknown issuer** — drop a PDF from an unregistered company: extracted with the base
   profile, `customer_resolution='unmatched'`, `status='needs_review'`,
-  `detected_issuer_name` populated. Then `POST /customers` and watch the backlog re-resolve.
-- **Drift** — add a label via `POST /customers/:slug/profiles`, confirm v3 is active, reprocess,
+  `detected_issuer_name` populated. Then add them to `config/customers.yaml`, re-seed, and watch the backlog re-resolve.
+- **Drift** — add a label to the customer's profile YAML, re-seed, confirm v3 is active, reprocess,
   and check `GET /documents/:id/runs` shows v2 → null and v3 → value.
 - **Special terms across both types** — CloudShield yields 8 rows (one `burst` ×3 item-scoped,
   plus `free_trial`, `tiered_pricing`, `conversion_right`, `renewal_cap`, `credit`, `sla`) and

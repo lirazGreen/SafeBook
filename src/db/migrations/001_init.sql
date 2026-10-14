@@ -5,7 +5,6 @@ CREATE TYPE doc_type            AS ENUM ('order_form','purchase_order');
 CREATE TYPE customer_resolution AS ENUM ('matched','ambiguous','unmatched','manual');
 CREATE TYPE document_status     AS ENUM ('received','needs_classification',
                                          'extracted','needs_review','failed');
-CREATE TYPE profile_source      AS ENUM ('seed','api');
 CREATE TYPE party_role          AS ENUM ('buyer','vendor');
 
 -- SafeBook's customers: the ISSUER of the document (Acme, CloudShield,
@@ -31,16 +30,20 @@ CREATE TABLE customer_match_patterns (
 );
 CREATE INDEX ON customer_match_patterns (customer_id);
 
--- Append-only. A definition change inserts version+1; rows are never mutated,
--- so extraction_runs.profile_id pins the exact definition that ran.
+-- Append-only PROJECTION of config/profiles/*.yaml. The YAML is the single
+-- source of truth; `npm run seed` projects it into rows here, and nothing else
+-- writes this table — so there is no `source` column and no drift to arbitrate.
+-- Rows still need to exist (and be versioned) because extraction_runs.profile_id
+-- must point at an immutable record of the exact rules that produced each value.
+-- `definition` holds the MERGED result: the seeder resolves `extends: _base`
+-- once, so a row is self-contained and no re-merge is needed to interpret it.
 CREATE TABLE extraction_profiles (
   id           BIGSERIAL PRIMARY KEY,
   customer_id  BIGINT NULL REFERENCES customers(id) ON DELETE CASCADE, -- NULL = base profile
   doc_type     doc_type NOT NULL,
   version      INT NOT NULL,
   definition   JSONB NOT NULL,
-  content_hash TEXT NOT NULL,
-  source       profile_source NOT NULL,
+  content_hash TEXT NOT NULL,            -- lets the seeder tell whether the YAML changed
   is_active    BOOLEAN NOT NULL DEFAULT FALSE,
   created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -51,6 +54,8 @@ CREATE TABLE documents (
   id                      BIGSERIAL PRIMARY KEY,
   file_sha256             TEXT NOT NULL UNIQUE,          -- idempotency
   original_filename       TEXT NOT NULL,                 -- stored, never used for logic
+  ingress                 TEXT CHECK (ingress IN ('poll','upload')),  -- how it arrived;
+                                                 -- not overwritten on a cross-ingress duplicate
   page_count              INT,
   raw_text                TEXT,                          -- frozen: evidence offsets index into it
   storage_key             TEXT,                          -- archive/<sha256>.pdf
@@ -83,6 +88,7 @@ CREATE TABLE documents (
   updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX ON documents (status);
+CREATE INDEX ON documents (ingress);
 CREATE INDEX ON documents (customer_id, doc_type);
 CREATE INDEX ON documents (customer_resolution) WHERE customer_resolution <> 'matched';
 CREATE INDEX ON documents USING GIN (attributes);

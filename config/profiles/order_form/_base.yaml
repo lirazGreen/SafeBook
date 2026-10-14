@@ -1,0 +1,29 @@
+# Base profile for ANY order form. A customer file states only its deltas.
+doc_type: order_form
+
+fields:
+  start_date:
+    labels: ["Start Date", "Subscription Start Date", "Contract Start Date"]
+    input_formats: [long_month, slash_mdy, dash_mdy]
+  end_date:
+    labels: ["End Date", "Subscription End Date", "Contract End Date"]
+    input_formats: [long_month, slash_mdy, dash_mdy]
+  amount:
+    labels: ["Total fee", "Total Subscription Fee", "Total Price"]
+  payment_terms:
+    strategy: llm                  # order forms bury this in prose
+    sections: ["Payment Terms", "Terms and Conditions"]
+
+items:
+  column_synonyms:
+    product_name: ["Name", "Product Name", "Subscriptions", "Description"]
+    quantity:     ["Quantity", "Quantity of Billable Units"]
+    unit_price:   ["Rate", "Unit Price", "Monthly / Unit Price"]
+    total_amount: ["Total amount", "Total Amount", "Total Price"]
+  reconcile: quantity * unit_price
+  tolerance: 0.01
+
+special_terms:
+  strategy: llm                    # numbered prose, no labels
+  section: "Special Terms"
+  unknown_type: unknown

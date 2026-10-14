@@ -1,0 +1,29 @@
+# Deltas from order_form/_base.yaml. Identity lives in config/customers.yaml.
+extends: _base
+
+fields:
+  amount:
+    labels: ["Total Subscription Fee"]
+    money_format: code_prefix          # "USD 23,640,000.00"
+  start_date: { labels: ["Subscription Start Date"], input_format: slash_mdy }
+  end_date:   { labels: ["Subscription End Date"],   input_format: slash_mdy }
+  buyer_signature_present:
+    strategy: placeholder_lines        # "Name: ______" still blank => false
+
+# Its own "Purchase Order Information" block holds PO Amount: USD 0.00, which
+# would otherwise be picked up as the contract total.
+ignore_sections: ["Purchase Order Information"]
+
+items:
+  header_rows: 2                       # headers wrap over two lines
+  group_rows: '^Year \d+$'             # Year 1/2/3 carry no data
+  wrapped_cells: true
+  reconcile: quantity * unit_price * order_term_months   # priced monthly
+  tolerance_pct: 0.5                   # unit price rounded to 2dp per the document
+  optional_columns:
+    subscription_year: ["Subscription Year"]
+    order_term_months: ["Order Term (Months)"]
+
+optional_fields:
+  marketplace:              { labels: ["Azure Private Offer"] }
+  subscription_term_months: { labels: ["Subscription Term (months)"], type: number }
