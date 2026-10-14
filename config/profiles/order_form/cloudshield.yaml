@@ -16,7 +16,7 @@ ignore_sections: ["Purchase Order Information"]
 
 items:
   header_rows: 2                       # headers wrap over two lines
-  group_rows: '^Year \d+$'             # Year 1/2/3 carry no data
+  carry_down: [subscription_year]      # sparse column: blank rows inherit from above
   wrapped_cells: true
   reconcile: quantity * unit_price * order_term_months   # priced monthly
   tolerance_pct: 0.5                   # unit price rounded to 2dp per the document

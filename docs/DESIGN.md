@@ -630,7 +630,7 @@ fields:
 ignore_sections: ["Purchase Order Information"]              # blocks "PO Amount: USD 0.00"
 items:
   header_rows: 2                   # wrapped headers
-  group_rows: '^Year \d+$'         # Year 1/2/3 rows carry no data
+  carry_down: [subscription_year]  # sparse column: blank rows inherit from above
   wrapped_cells: true
 ```
 
@@ -866,23 +866,29 @@ Three distinct cases, deliberately not collapsed into one flag — the first is 
 | 3 | document-level equivalent | `from_document` | yes |
 | 4 | nothing found | value stays `NULL` | yes |
 
-**Case 1 is structural, not inferred.** CloudShield's table:
+**Case 1 is structural, not inferred.** CloudShield's reconstructed table (phase 0 output,
+`·` = empty cell):
 ```
-Year 1
-  CloudShield Enterprise  3/1/2025  2/28/2026  12.00  3.25      180000  USD 7,020,000.00
-  Premium Support         3/1/2025  2/28/2026  12.00  22916.67  1       USD   275,000.00
-Year 2
-  …
+y=661  Year 1 | CloudShield Enterprise | 3/1/2025 | 2/28/2026 | 12.00 | 3.25     | 180000 | USD 7,020,000.00
+y=631    ·    | Premium Support        | 3/1/2025 | 2/28/2026 | 12.00 | 22916.67 | 1      | USD   275,000.00
+y=601  Year 2 | CloudShield Enterprise | 3/1/2026 | 2/28/2027 | 12.00 | 3.25     | 195000 | USD 7,605,000.00
 ```
-`Year 1` is a header covering the two rows beneath it, already declared by the profile's
-`group_rows: '^Year \d+$'`. The Premium Support row's `subscription_year` is *defined* by that
-header, so labelling it a suggestion would understate it — and flagging it would put all six
-CloudShield items in the review queue on every run, making the queue worthless.
+`Year 1` is a cell **in the first data row**, in a sparse column declared by the profile's
+`carry_down: [subscription_year]`. The Premium Support row's value is *defined* by the row
+above it, so labelling it a suggestion would overstate the doubt — and flagging it would put
+all six CloudShield items in the review queue on every run, making the queue worthless.
 
-**Case 2 does not occur in any of the four samples** — Acme, CloudShield and both POs repeat
-every cell explicitly. So it is defensive capability for a fifth customer, validated by a
-**synthetic fixture**, and deliberately not counted toward the ≥95% figure, which is measured
-only on the real documents.
+**Case 2 DOES occur — phase 0 disproved the earlier claim.** `subscription_year` is blank on
+all three CloudShield Premium Support rows and must be inherited from the Enterprise row above:
+
+```
+y=661  Year 1 | CloudShield Enterprise | 3/1/2025 | ... | USD 7,020,000.00
+y=631    ·    | Premium Support         | 3/1/2025 | ... | USD   275,000.00   <- inherits "Year 1"
+```
+
+Note this is **not** a group header row — `Year 1` is a cell *in the first data row*, in a
+sparse column. So the mechanism is carry-down within a column, and it is exercised by real
+data rather than only by a synthetic fixture.
 
 ### Fill-down is automatic, with a four-field deny-list
 
@@ -950,31 +956,52 @@ partly for this reason** — `transform[5]` on a text item is the *baseline*, wh
 across ascenders and descenders. (The macOS PDFKit route used for inspection returns per-glyph
 boxes and is unsuitable; it is not part of the service.)
 
-### Algorithm
+### Algorithm — VERIFIED in phase 0 against all four samples
 
-1. **Runs, not glyphs** — `getTextContent()` yields fragments as the author emitted them, with
-   baseline x/y and width.
-2. **Band rows** on baseline y, tolerance derived from font height.
-3. **Detect columns** by clustering run-start x values over the table region; real columns show
-   up as dense vertical bands.
-4. **Assemble the header** across the profile's `header_rows` (2 for CloudShield), concatenating
-   per column → `Monthly / Unit Price **`.
-5. **Map logical → physical** columns via the profile's `column_synonyms`.
-6. **Classify each band:**
-   - one populated column matching `group_rows` → **group header**; set the current group value
-   - only the product column populated → **pending prefix**; hold it
-   - data columns populated → **emit a row**, prepending any held prefix
+`pdfjs-dist` returns **assembled word runs** with `transform[4]`=x and `transform[5]`=the
+true **baseline**, which eliminates the descender problem entirely. Confirmed: "Subscription"
+y=703, "Year" y=691, no glyph-box noise.
 
-Rule 6 resolves both row shapes: prefix `CloudShield` + `Enterprise` with an empty product cell
-→ `CloudShield Enterprise`; prefix `Premium` with product cell `Support` → `Premium Support`.
+1. **Discover columns from DATA rows only**, clustering run-start x with an 18pt gap threshold.
+   **Never include the header** — header fragments are offset from their columns, and including
+   NovaFleet's header invented a phantom 7th column.
+2. **Find anchor rows**: y-levels populating ≥4 distinct columns. These are the real data lines.
+3. **Band half-width = 1.2 × the MEDIAN gap between consecutive y-levels.** Not the row pitch.
+4. **Assign every item to its nearest anchor** within that band, then to a column by x.
+5. **Join multi-fragment cells** top-to-bottom, left-to-right.
+6. **Assemble the header column-first** over the header's y-range, using the data columns.
 
-**Reconstruction is self-checking.** If it goes wrong, `Σ items == amount` breaks — which is
-exactly why `product_name` must never fill down. A mis-parse has to stay visibly broken rather
-than be auto-completed into something plausible.
+Result: 19 of 19 item rows recovered across the four documents, and **all four reconcile
+exactly** against their stated totals (152,500 / 23,640,000 / 162,000 / 451,000).
 
-⚠️ **Phase-0 spike, before anything depends on it:** confirm the column x-bands against real
-`pdfjs-dist` output for all four samples. The algorithm above is designed from reading-order
-evidence and one coordinate experiment; the exact band geometry is unverified.
+### What phase 0 corrected
+
+Four things in the pre-spike design were wrong:
+
+| Was | Actually |
+|---|---|
+| **"Pending prefix": wrapped names precede the data line** | ✗ Names **bracket** it. CloudShield row 1 is `y=667 "CloudShield"` / `y=661 <data>` / `y=655 "Enterprise"`. The prefix rule would have mis-assigned "Enterprise" to the *next* row. Nearest-anchor assignment handles both this and BrightOps' name-starts-on-the-data-line layout |
+| **`group_rows: '^Year \d+$'` matches separate group header rows** | ✗ There are **no group rows**. `Year 1` sits at x=87.2 *in the data row itself* — it is a **sparse column** whose value carries down to the rows beneath. The regex would have matched nothing |
+| **Band = row pitch / 2** | ✗ Pitch is **not uniform** — a wrapped product name makes one row taller (BrightOps page 2: 40.4 then 26.2) — and a page holding one row has no pitch at all. That orphaned `Enterprise`. Median line gap adapts: 17.5pt for BrightOps, 7.2pt for CloudShield |
+| **Fill-down never occurs in the samples** | ✗ It **does**. `subscription_year` is blank on all three CloudShield Premium Support rows and must be inherited from the Enterprise row above. So the `inherited` path is exercised by real data, not only by a synthetic fixture |
+
+### Also found: tables span pages
+
+**Both POs continue across a page break**, and the header appears only on the first page:
+
+| Document | Rows |
+|---|---|
+| BrightOps | 1 at the foot of page 1 (y=131), 3 at the head of page 2 (y=704, 663, 637) |
+| NovaFleet | 2 on page 1 (y=117, 90), 2 on page 2 (y=704, 677) |
+
+So reconstruction operates over a **list of page regions**, not one page, and the column map
+learned from the first region carries to the continuation. Nothing in the pre-spike design
+accounted for this.
+
+**Reconstruction stays self-checking.** If it goes wrong, `Σ items == amount` breaks on
+documents where it currently holds exactly — which is why `product_name` must never fill down.
+
+Spike code kept in `spike/` as the record of this verification.
 
 ## LLM extraction contract
 
