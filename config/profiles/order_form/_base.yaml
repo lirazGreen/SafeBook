@@ -1,4 +1,8 @@
-# Base profile for ANY order form. A customer file states only its deltas.
+# Base profile for ANY order form.
+#
+# No field declares "use the LLM". Each tries its deterministic rule and
+# escalates only if that yields nothing or fails to parse — so what needs Claude
+# is decided by the document, never by configuration.
 doc_type: order_form
 
 fields:
@@ -9,13 +13,62 @@ fields:
     labels: ["End Date", "Subscription End Date", "Contract End Date"]
     input_formats: [long_month, slash_mdy, dash_mdy]
   amount:
-    labels: ["Total fee", "Total Subscription Fee", "Total Price"]
+    labels: ["Total fee", "Total Subscription Fee", "Total Price", "Total Amount"]
   payment_terms:
-    # No strategy declared. Every field tries its deterministic rule first and
-    # escalates to Claude only if that yields nothing or fails to parse. "Needs
-    # an LLM" is not a property anyone declares — it is what the document does.
     labels: ["Payment Terms"]
     sections: ["Payment Terms", "Terms and Conditions"]   # sent only if it escalates
+  billing_frequency:
+    labels: ["Billing Frequency"]
+    sections: ["Payment Terms", "Terms and Conditions"]
+
+# An order form is issued by the SELLER, so the vendor is the issuer and the
+# buyer is the "customer" the document describes. Note the collision this avoids:
+# a section headed "Customer Information" describes the BUYER, not SafeBook's
+# customer.
+parties:
+  buyer:
+    name:
+      # Order matters. CloudShield reuses "Customer Billing Name:" for both the
+      # organisation (line 17) and a contact person (line 19), so the more
+      # specific label is tried first and labelValue takes the first match.
+      labels: ["Customer Billing Company Name", "Customer Billing Name", "Bill To Name", "To"]
+    address:
+      labels: ["Bill To", "Bill to", "Billing Address"]
+    shipping_address:
+      labels: ["Customer Shipping Address", "Ship To"]
+    contact_email:
+      labels: ["Customer Billing Email Address", "Billing Email"]
+    contact_phone:
+      labels: ["Customer Billing Phone", "Billing Phone"]
+    # Order forms carry a TWO-COLUMN signature block, so both columns collapse
+    # onto single text lines and "Name:" appears twice with nothing in the text
+    # to separate them. Only x-coordinates can. Until that strategy exists these
+    # return null, which ESCALATES rather than asserting the contract is unsigned.
+    signature_present:
+      labels: ["Buyer Signature", "Customer Signature"]
+      strategy: two_column_signature
+      buyer_column: right
+    # "Name:", "Title:" and "Date:" each appear TWICE — once per column — so a
+    # plain label lookup would always return the vendor's (leftmost) signer.
+    signer_name:    { labels: ["Name"],  strategy: two_column_signature, buyer_column: right }
+    signer_title:   { labels: ["Title"], strategy: two_column_signature, buyer_column: right }
+    signature_date: { labels: ["Date"],  strategy: two_column_signature, buyer_column: right,
+                      input_formats: [dash_mdy, long_month] }
+  vendor:
+    name:
+      labels: ["Vendor Name", "Supplier Name"]
+    address:
+      labels: ["Vendor Address"]
+
+type_fields:
+  quote_number:             { labels: ["Quote Number"] }
+  quote_date:               { labels: ["Quote Date"], input_formats: [long_month, slash_mdy] }
+  quote_expiration_date:    { labels: ["Quote Expiration Date"], input_formats: [long_month, slash_mdy] }
+  proposed_by:              { labels: ["Proposed By"] }
+  subscription_term_months: { labels: ["Subscription Term (months)"], type: number }
+  # CloudShield's own "Purchase Order Information" block — the classification trap.
+  po_number:                { labels: ["PO Number"] }
+  po_amount:                { labels: ["PO Amount"] }
 
 items:
   column_synonyms:
@@ -30,9 +83,8 @@ items:
 
 special_terms:
   section: "Special Terms"
-  # POs label their terms ("Burst (Item Level):"), so labelled_bullets parses them
-  # and nothing escalates. Order forms number them without labels, so the bullet
-  # parse finds nothing and this escalates. Same config, both behaviours.
+  # Order forms NUMBER their terms without labelling them, so the bullet parse
+  # finds nothing and this escalates. POs label theirs, so theirs never does.
   type_labels:
     burst: ["Burst (Item Level)", "Burst"]
     technical_account_manager: ["Technical Account Manager"]

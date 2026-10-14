@@ -186,17 +186,37 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     const pick = (f: string) => {
       const s = spec[f];
       if (s === undefined) return null;
-      return s.strategy === 'multiline_after_label'
-        ? multilineAfterLabel(rawText, s.labels ?? [], {
+      switch (s.strategy) {
+        case 'multiline_after_label':
+          return multilineAfterLabel(rawText, s.labels ?? [], {
             maxLines: s.max_lines ?? 4,
             ...(def.section_headings ? { stopAt: def.section_headings } : {}),
-          })
-        : labelValue(rawText, s.labels ?? []);
+          });
+        case undefined:
+        case 'label_value':
+          return labelValue(rawText, s.labels ?? []);
+        default:
+          // A strategy is DECLARED but not implemented yet. Return null so the
+          // field escalates, rather than falling through to a plain label lookup.
+          //
+          // Falling through was actively harmful: an order form's buyer
+          // signer_name is declared with the bare label "Name", which matched
+          // the ITEM TABLE HEADER and produced
+          // "Start Date End Date Rate Quantity Total amount". Garbage is worse
+          // than nothing — "could not tell" and "here is a value" are different
+          // answers, and only the first one escalates.
+          return null;
+      }
     };
     const sigSpec = spec['signature_present'];
-    const sig = sigSpec ? signatureMarker(rawText, sigSpec.labels ?? []) : null;
+    const sig =
+      sigSpec === undefined ? null
+      : sigSpec.strategy !== undefined && sigSpec.strategy !== 'signature_marker' ? null
+      : signatureMarker(rawText, sigSpec.labels ?? []);
+    // through pick(), so an unimplemented strategy returns null here too rather
+    // than a plain label lookup finding the WRONG column's date
     const dateSpec = spec['signature_date'];
-    const sigDateRaw = dateSpec ? labelValue(rawText, dateSpec.labels ?? []) : null;
+    const sigDateRaw = pick('signature_date');
 
     const name = str(pick('name'));
     const address = str(pick('address'));

@@ -1875,16 +1875,109 @@ passes.
 Deliberately this early. It is a **tool, not a deliverable** — once it exists every later change
 is measured rather than guessed at, instead of building seven phases blind.
 
-### Phases 4–7 — add customers in difficulty order
+### Phase 4 — NovaFleet ✅ *already passing*
 
-Each phase earns specific capabilities rather than building a module in the abstract:
+The profile-system canary. Exit criterion was "adding a second customer should be nearly free"
+— it turned out to need **no customer profile file at all**: NovaFleet scores 48/48 from
+`purchase_order/_base.yaml` alone. That is the Adaptability KPI demonstrated rather than
+claimed.
 
-| Phase | Customer | What it forces into existence |
+### What actually escalates, across all four documents
+
+Enumerated rather than assumed, by running every field's deterministic rule over all four:
+
+| Document | Escalates |
+|---|---|
+| BrightOps | **nothing** |
+| NovaFleet | **nothing** |
+| Acme | `payment_terms_days`, `special_terms` |
+| CloudShield | `payment_terms_days`, `billing_frequency`, `special_terms` |
+
+**5 escalations across 2 documents; 2 documents need zero calls.** So phase 5 records 5
+fixtures — it is not "Acme's phase", and describing it that way was the same mistake as
+declaring `strategy: llm` per customer.
+
+CloudShield's `billing_frequency` is the instructive one: Acme writes
+`Billing Frequency: Annual` as a plain label, while CloudShield states it only in prose
+("Payment will be made annually"). Same field, same profile, one parses and one escalates —
+decided by the document.
+
+### Two bugs the enumeration found
+
+**1. The order-form base profile was substantially incomplete.** Auditing it against the PO base
+showed it declared no `parties` and no `type_fields` at all — so both order forms would have
+extracted no buyer, no vendor, no addresses, no signatures and no quote numbers. Not escalated:
+*silently absent*, because an undeclared field is never attempted. (The order-form base was
+written before the PO base was rewritten to include those sections, and never back-ported. This
+was the third gap found in it — the first two were item date synonyms and `billing_frequency`.)
+
+The lesson: **an undeclared field fails silently, while a failed rule escalates.** Those are
+very different outcomes, and only the second is safe. A profile audit comparing the two base
+profiles section by section is now a cheap check worth repeating whenever either changes.
+
+**2. An unimplemented strategy fell through to a plain label lookup — and invented data.**
+An order form's buyer `signer_name` is declared with the bare label `Name`, pending the
+two-column signature strategy. Falling through made it match the **item table header**:
+
+```
+signer_name = "Start Date End Date Rate Quantity Total amount"
+```
+
+A declared-but-unimplemented strategy now returns `null`, which escalates. Garbage is worse
+than nothing: *"could not tell"* and *"here is a value"* are different answers, and only the
+first one escalates. Two call sites bypassed the check entirely (`signature_present` and
+`signature_date` called their locators directly) and now route through it.
+
+### Phase 5 — wire the escalator
+
+**Not an Acme phase.** Escalation is customer-agnostic: *any* field on *any* document reaches
+Claude when its deterministic rule yields nothing or fails to parse. The seam was built in
+phase 2 with `escalate: null`; this phase supplies the implementation behind it — the Claude
+client in live/record/fixture modes, the recorded fixtures, and the evidence + value-in-quote
+verification already written in `llm/evidence.ts`.
+
+An earlier draft of this plan called phase 6 "Acme's prose", which framed needing an LLM as a
+property of a customer. It is not. Once wired, a *future* BrightOps document whose wording
+changes so `Net 30` no longer parses escalates automatically — no config change and no new
+phase. Building it before Acme also means Acme lands complete in one pass instead of sitting
+half-extracted for a phase.
+
+**Exit:** Acme's payment terms resolves to `Net 30` by escalation from
+*"shall be made within thirty (30) days from invoice"*, while **both POs still make zero
+calls** — asserted, not observed.
+
+### Phase 6 — Acme, complete
+
+The first customer needing a profile override, in four ways:
+
+| | Acme | the POs |
 |---|---|---|
-| 4 | **NovaFleet** | The real profile system: YAML + zod strict, `extends` merge, versioned non-destructive seed, resolver with base fallback. Should be **nearly free** — the Adaptability KPI proven by the build order itself. If it's hard, the profile system is wrong; fix it before Acme |
-| 5 | **Acme** (structured) | `long_month` + `short_month_compact` dates with the ambiguity guard, `symbol_prefix` money with the currency precedence, two-column signature strategy |
-| 6 | **Acme** (prose) | `llm/client.ts` live/fixture/record modes; zod schemas with `value: null`; evidence `indexOf` + value-in-quote verification; one repair-prompt retry; per-document call cap. **Exit:** `Net 30` from "thirty (30) days", burst 5%, TAM found via synonym |
-| 7 | **CloudShield** | The hard table (two-row wrapped headers, `Year n` group rows, pending-prefix rule), `ignore_sections` for its own PO-section trap, per-year burst → item attribution, `code_prefix` money, placeholder-line signature. **Exit: all four ≥95%** |
+| document dates | `January 1, 2025` | `03-01-2025` |
+| item dates | `Jan 1,2025` (no space after the comma) | `03-01-2025` |
+| money | `$152,500` — **no ISO code anywhere in the document**, so `default_currency` is required | `$162,000 USD` |
+| signature | **two-column block** | `Buyer Signature: ✔ Signed` |
+
+The signature is the real work and the first strategy to need **geometry** rather than
+`raw_text`. Both columns collapse onto single text lines, so `Name:` appears twice with
+nothing to distinguish them:
+
+```
+Acme Appsoft Inc
+Signature:
+Name: John Smith      <- x≈77,  Acme's (vendor) signer
+Name: Bob Lee         <- x≈311, Appsoft's (buyer) signer
+```
+
+Only the x-coordinates separate them; the profile declares `buyer_column: right`.
+
+### Phase 7 — CloudShield
+
+The hardest document: the 8-column wrapped table (already proven in phase 0),
+`ignore_sections` for its own "Purchase Order Information" block, per-year Burst attribution
+onto the right item rows, `code_prefix` money, and the `placeholder_lines` signature strategy
+where blank `Name: ____` lines mean **false**.
+
+**Exit: all four documents at ≥95%.**
 
 ### Phase 8 — operational layer
 
