@@ -2017,38 +2017,58 @@ half-extracted for a phase.
 *"shall be made within thirty (30) days from invoice"*, while **both POs still make zero
 calls** — asserted, not observed.
 
-### Phase 6 — Acme, complete
+### Phase 6 — the remaining extraction capabilities
 
-The first customer needing a profile override, in four ways:
+**Not "Acme" and not "CloudShield".** Labelling these by customer was the same error as
+declaring `strategy: llm` per customer, and it had a concrete cost: it would have produced a
+strategy fitted to one document and then a second one for the other.
 
-| | Acme | the POs |
+| Capability | Exercised by | Previously mislabelled as |
 |---|---|---|
-| document dates | `January 1, 2025` | `03-01-2025` |
-| item dates | `Jan 1,2025` (no space after the comma) | `03-01-2025` |
-| money | `$152,500` — **no ISO code anywhere in the document**, so `default_currency` is required | `$162,000 USD` |
-| signature | **two-column block** | `Buyer Signature: ✔ Signed` |
+| `two_column_signature` ✅ | **both** order forms | phase 6 "Acme" **and** phase 7 "CloudShield" |
+| issuer → party name ✅ | both order forms | — (never planned) |
+| `default_currency` | Acme (no ISO code anywhere) | phase 6 "Acme" |
+| `ignore_sections` | CloudShield's decoy PO block | phase 7 |
+| `optional_fields` | CloudShield contacts, marketplace | phase 6–7 |
+| fixture recording | any escalating document | phase 6 "Acme" |
 
-The signature is the real work and the first strategy to need **geometry** rather than
-`raw_text`. Both columns collapse onto single text lines, so `Name:` appears twice with
-nothing to distinguish them:
+#### Two strategies collapsed into one
 
-```
-Acme Appsoft Inc
-Signature:
-Name: John Smith      <- x≈77,  Acme's (vendor) signer
-Name: Bob Lee         <- x≈311, Appsoft's (buyer) signer
-```
+An earlier plan had `two_column_signature` for Acme and a separate `placeholder_lines` for
+CloudShield. Checking the actual geometry showed the blocks are **structurally identical** —
+same two columns, vendor left, buyer right:
 
-Only the x-coordinates separate them; the profile declares `buyer_column: right`.
+| | left column | right column |
+|---|---|---|
+| Acme | x=77 `Name: John Smith` | x=311 `Name: Bob Lee` |
+| CloudShield | x=96 `Name: ____` | x=312 `Name: ____` |
 
-### Phase 7 — CloudShield
+The only difference is whether the chosen column holds a value or blank underscores. So
+`placeholder_lines` was never a strategy — it is this one capability's second outcome. It
+yields three results rather than two:
 
-The hardest document: the 8-column wrapped table (already proven in phase 0),
-`ignore_sections` for its own "Purchase Order Information" block, per-year Burst attribution
-onto the right item rows, `code_prefix` money, and the `placeholder_lines` signature strategy
-where blank `Name: ____` lines mean **false**.
+| | meaning |
+|---|---|
+| `true` | the column carries a filled value — Acme |
+| `false` | the block exists but is unfilled — CloudShield |
+| `null` | **no two-column block at all** — a PO. Escalates rather than asserting unsigned |
 
-**Exit: all four documents at ≥95%.**
+Column positions are discovered from the document (the anchor line carrying the repeated
+`Signature`/underscore marker), not from constants — which is why Acme at x=77/311 and
+CloudShield at x=96/312 both work.
+
+#### The issuer already names a party
+
+Order forms never label their vendor — `Vendor Name:` simply does not appear — so the vendor
+row was empty on documents that plainly name it. But the issuer is already inferred, and the
+issuer **is** one of these parties: the vendor on an order form, the buyer on a PO. Wiring that
+fills the gap (`Acme`, `CloudShield Security, Inc.`) while a label-based value always wins,
+since it is tied to an explicit statement in the document.
+
+### Phase 7 — add the order forms to the scored set
+
+With the capabilities above in place, this is mostly configuration plus the first real fixture
+recording. **Exit: all four documents at ≥95%.**
 
 ### Phase 8 — operational layer
 

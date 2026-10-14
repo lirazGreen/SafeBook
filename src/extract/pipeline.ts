@@ -13,6 +13,7 @@ import { parseNetTerms } from './normalize/netTerms.ts';
 import {
   labelValue, labelledBullets, multilineAfterLabel, signatureMarker,
 } from './strategies/locate.ts';
+import { readTwoColumnSignature } from './strategies/twoColumnSignature.ts';
 import { dateEnvelope, validate, type ReviewReason } from './validate.ts';
 import type { Escalator, FieldSource } from './engine.ts';
 
@@ -187,8 +188,24 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
   record('billing_frequency', billingFrequency, billingFrequency ? 'rule' : null, freqRaw);
 
   // ---- 5. parties
+  //
+  // Order forms use a two-column signature block, which needs GEOMETRY: each
+  // line collapses both columns into one string, so "Name:" appears twice with
+  // nothing in the text to tell them apart. Read once per role and reused for
+  // all four signature fields.
+  const allRuns = pages.flatMap((pg) => pg.runs);
   const parties: PartyRecord[] = (['buyer', 'vendor'] as const).map((role) => {
     const spec = def.parties?.[role] ?? {};
+    const sigStrategy = spec['signature_present']?.strategy;
+    const twoCol =
+      sigStrategy === 'two_column_signature'
+        ? readTwoColumnSignature(
+            allRuns,
+            // the issuer's column: an order form is issued by the VENDOR, which
+            // sits left, so the buyer is right
+            role === 'buyer' ? (spec['signature_present']?.buyer_column ?? 'right') : 'left',
+          )
+        : null;
     const pick = (f: string) => {
       const s = spec[f];
       if (s === undefined) return null;
@@ -216,9 +233,11 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     };
     const sigSpec = spec['signature_present'];
     const sig =
-      sigSpec === undefined ? null
-      : sigSpec.strategy !== undefined && sigSpec.strategy !== 'signature_marker' ? null
-      : signatureMarker(rawText, sigSpec.labels ?? []);
+      twoCol !== null
+        ? (twoCol.signaturePresent === null ? null : { value: twoCol.signaturePresent, at: null })
+        : sigSpec === undefined ? null
+        : sigSpec.strategy !== undefined && sigSpec.strategy !== 'signature_marker' ? null
+        : signatureMarker(rawText, sigSpec.labels ?? []);
     // through pick(), so an unimplemented strategy returns null here too rather
     // than a plain label lookup finding the WRONG column's date
     const dateSpec = spec['signature_date'];
@@ -228,7 +247,7 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     const address = str(pick('address'));
     if (name !== null) record(`${role}.name`, name, 'rule', pick('name'));
     if (address !== null) record(`${role}.address`, address, 'rule', pick('address'));
-    if (sig !== null) record(`${role}.signature_present`, sig.value, 'rule', sig.at);
+    if (sig !== null) record(`${role}.signature_present`, sig.value, 'rule', sig.at ?? null);
 
     return {
       role, name, address,
@@ -237,11 +256,28 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
       contactEmail: str(pick('contact_email')),
       contactPhone: str(pick('contact_phone')),
       signaturePresent: sig?.value ?? null,
-      signerName: str(pick('signer_name')),
-      signerTitle: str(pick('signer_title')),
-      signatureDate: sigDateRaw ? dateFrom(sigDateRaw.text, dateSpec) : null,
+      signerName: twoCol?.signerName ?? str(pick('signer_name')),
+      signerTitle: twoCol?.signerTitle ?? str(pick('signer_title')),
+      signatureDate:
+        twoCol?.signatureDate !== undefined && twoCol?.signatureDate !== null
+          ? dateFrom(twoCol.signatureDate, dateSpec)
+          : sigDateRaw ? dateFrom(sigDateRaw.text, dateSpec) : null,
     };
   });
+
+  // The issuer's name is already inferred, and the issuer IS one of these
+  // parties — the VENDOR on an order form, the BUYER on a PO. Order forms never
+  // label their vendor ("Vendor Name:" does not appear), so without this the
+  // vendor row would be empty on a document that plainly names it.
+  //
+  // Only fills a gap: a label-based value always wins, since it is tied to an
+  // explicit statement in the document.
+  const issuerRole = docType === 'order_form' ? 'vendor' : 'buyer';
+  const issuerParty = parties.find((x) => x.role === issuerRole);
+  if (issuerParty !== undefined && issuerParty.name === null && inferred.name !== null) {
+    issuerParty.name = inferred.name;
+    record(`${issuerRole}.name`, inferred.name, 'rule', null);
+  }
 
   // ---- 6. type-specific details
   const typeDetails: Record<string, string | null> = {};
