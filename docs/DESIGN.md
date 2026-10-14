@@ -560,8 +560,9 @@ What actually varies across the four samples:
 Seeds, base plus deltas only:
 
 ```
-config/fields/{order_form,purchase_order}.yaml
-config/profiles/order_form/{_base,acme,cloudshield}.yaml
+config/customers.yaml                                        <- identity + match patterns, ONCE per customer
+config/fields/{order_form,purchase_order}.yaml               <- the output contract (code, not config)
+config/profiles/order_form/{_base,acme,cloudshield}.yaml     <- extraction deltas only
 config/profiles/purchase_order/{_base,brightops,novafleet}.yaml
 ```
 
@@ -587,9 +588,6 @@ items:
 ```yaml
 # config/profiles/order_form/acme.yaml  — deltas only
 extends: _base
-customer: acme
-match:
-  - { kind: signature_block, pattern: '^Acme$' }   # the one place its name appears
 fields:
   amount:     { labels: ["Total fee"], money_format: symbol_prefix, currency: USD }
   start_date: { labels: ["Start Date"], input_format: long_month }
@@ -606,9 +604,6 @@ special_terms:
 ```yaml
 # config/profiles/order_form/cloudshield.yaml
 extends: _base
-customer: cloudshield
-match:
-  - { kind: text, pattern: 'CloudShield Security, Inc\.' }
 fields:
   amount: { labels: ["Total Subscription Fee"], money_format: code_prefix }
   buyer_signature_present: { strategy: placeholder_lines }   # "Name: ____" ⇒ false
@@ -712,6 +707,23 @@ section (Acme's GDPR sentence, its tax note, CloudShield's Exhibit A definitions
 only when a profile *declares* it as an optional field — never speculatively. `special_terms`
 stays scoped to the `Special Terms` section, and `documents.raw_text` means nothing is lost
 either way.
+
+### A customer can issue both document types
+
+`extraction_profiles` is keyed `(customer_id, doc_type, version)`, so one customer with
+both an order form and a purchase order is simply two rows — **no schema change**. Verified
+against the live DB: cloudshield + order_form and cloudshield + purchase_order coexist, both
+active, while a *second* active profile for the same pair is rejected by the partial unique
+index.
+
+This is why customer identity lives in `config/customers.yaml` rather than inside each
+profile file. Match patterns identify a **customer**, not a (customer, doc_type) pair — putting
+them in per-doc-type files would duplicate the slug, display name and patterns across two
+files that could then drift apart. The DB already reflects this: patterns hang off
+`customers`, not off `extraction_profiles`.
+
+Adding a customer that issues both types is therefore one `customers.yaml` entry plus two
+small profile files, with nothing repeated.
 
 ### YAML ↔ DB precedence
 

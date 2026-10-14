@@ -1,0 +1,42 @@
+# SafeBook's customers — the ISSUER of each document.
+#
+# Declared ONCE here, independent of document type, because match patterns
+# identify a *customer*, not a (customer, doc_type) pair. A customer that issues
+# both order forms and purchase orders therefore has one entry here and one
+# profile file per type, with nothing duplicated.
+#
+# This file seeds `customers` and `customer_match_patterns`.
+# `npm run seed` is non-destructive: it never overwrites a profile version that
+# came from the API.
+#
+# match.kind:
+#   text            - search the whole document text
+#   signature_block - search only the signature block
+#   doc_id          - match a document-identifier pattern (PO number, quote number)
+# Patterns are regex sources, compiled at load time so a broken one fails loudly.
+
+customers:
+  - slug: acme
+    name: Acme
+    match:
+      # "Acme" appears exactly ONCE in its entire document — in the signature
+      # block. A whole-text search would be too weak to rely on, and its brand
+      # is otherwise only in an embedded logo image.
+      - { kind: signature_block, pattern: '^Acme$' }
+
+  - slug: cloudshield
+    name: CloudShield Security, Inc.
+    match:
+      - { kind: text, pattern: 'CloudShield Security, Inc\.' }
+
+  - slug: brightops
+    name: BrightOps Analytics Ltd.
+    match:
+      - { kind: text,   pattern: 'BrightOps Analytics Ltd\.' }
+      - { kind: doc_id, pattern: 'PO-BO-\d+' }
+
+  - slug: novafleet
+    name: NovaFleet Technologies Inc.
+    match:
+      - { kind: text,   pattern: 'NovaFleet Technologies Inc\.' }
+      - { kind: doc_id, pattern: 'PO-NF-\d+' }
