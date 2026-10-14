@@ -1,10 +1,9 @@
 import pg from 'pg';
 import { env } from '../config/env.ts';
+// Registers the DATE and NUMERIC parsers. Must be imported before any query:
+// see db/types.ts for why the driver's defaults lose information.
+import './types.ts';
 
-// Money arrives as NUMERIC. node-postgres hands NUMERIC back as a string by
-// default, which is correct — parsing it into a JS float would reintroduce the
-// rounding error NUMERIC exists to avoid. CloudShield's 22916.67 x 12 must stay
-// exact. Callers convert deliberately, never implicitly.
 export const pool = new pg.Pool({ connectionString: env.DATABASE_URL });
 
 export async function withTransaction<T>(fn: (c: pg.PoolClient) => Promise<T>): Promise<T> {
