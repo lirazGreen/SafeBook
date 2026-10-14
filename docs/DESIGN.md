@@ -1003,6 +1003,60 @@ documents where it currently holds exactly — which is why `product_name` must 
 
 Spike code kept in `spike/` as the record of this verification.
 
+## Generalising beyond the four samples
+
+The four documents are **examples, not the universe**. The service must take a new customer in
+a layout nobody has seen. What follows is an honest account of where that holds and where it
+does not.
+
+### Format-agnostic by construction
+
+| Component | Why it generalises |
+|---|---|
+| **Table reconstruction** | Derives everything from the document: columns by x-clustering, data rows by column occupancy, band from line gaps and glyph height. **No per-customer constants.** Verified by reconstructing CloudShield (8 cols, wrapped cells, 6pt line gap, single page) and BrightOps (6 cols, no wrapping, 14.6pt gap, split across two pages) from *identical defaults* |
+| **Base profile fallback** | An unregistered customer resolves to `(NULL, doc_type)`, is extracted, and is flagged `needs_review`. Nothing is dropped |
+| **Evidence, dedupe, queue, reconciliation** | Nothing in them refers to a document's shape |
+
+The three tuned thresholds are all overridable per profile, and their defaults **adapt to the
+table's own geometry** rather than to a known customer:
+
+| Option | Default | Why not a fixed number |
+|---|---|---|
+| `columnGapPt` | 18 | |
+| `anchorColumnRatio` | 0.5 of detected columns, floor 2 | The spike used a fixed "≥4 columns", which would find **no rows at all** in a legitimate 3-column table |
+| `bandFactor` | 1.2 × median line gap, capped at 0.6 × min row pitch **and** 2.5 × glyph height | Each bound alone fails: median gap equals row pitch on an unwrapped table and swallows the next row; pitch is undefined on a one-row page; and one distant stray run makes the median enormous |
+
+### Known limits — what extending actually costs
+
+| Extension | Cost |
+|---|---|
+| New customer, familiar formats | **YAML** — one `customers.yaml` entry + one profile file |
+| New label wording | **YAML**, but the *first* document misses that field and is flagged |
+| New date format (e.g. D/M/Y `15/03/2025`) | **Code** — a registry entry. Fails *safe*: the ambiguity guard flags rather than guessing |
+| New money format (e.g. `EUR 1.234,56`) | **Code** — a registry entry |
+| New document type (invoice, SOW, amendment) | **Migration** — new enum value, new field catalog |
+| Image-only scanned PDF | Out of scope by decision; detected as `NO_TEXT_LAYER`, never mis-extracted |
+
+### Tested, not merely claimed
+
+`tests/unit/generalisation.test.ts` and the "unfamiliar layouts" block of
+`tests/unit/tables.test.ts` assert graceful degradation on inputs the design was not built
+around:
+
+- A real table reconstructed with **zero configuration** — no labels, no `header_rows`, no
+  carry-down declared — and still reconciling to 23,640,000
+- A **3-column** table, which the pre-spike fixed "≥4 columns" rule would have missed entirely
+- A **wrapped cell** in an unfamiliar 2-column layout
+- **European decimal commas** (`1.234,56`) surviving reconstruction as text, to be rejected by
+  the money normaliser rather than silently mis-parsed
+- A stray footnote reported as an **orphan** rather than silently absorbed into a row
+- A document with **no table at all** returning no rows rather than inventing one
+- A **dense layout** needing `columnGapPt` lowered, proving the option works
+
+**The guiding property: partial extraction plus a review flag, never silent wrong data.**
+The reconciliation checks are what make that trustworthy — if reconstruction goes wrong,
+`Σ items == amount` breaks rather than producing a plausible-looking total.
+
 ## LLM extraction contract
 
 Model **`claude-opus-5`** (id in config so the accuracy harness can compare). Verified against
