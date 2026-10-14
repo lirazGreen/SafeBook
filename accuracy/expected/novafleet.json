@@ -1,0 +1,80 @@
+{
+  "file": "Purchase Order – NovaFleet Technologies Inc.pdf",
+  "_note": "Hand-read from the PDF. Dates are ISO as stored; the API renders mm-dd-yyyy.",
+  "document": {
+    "docType": "purchase_order",
+    "customerSlug": "novafleet",
+    "startDate": "2025-02-01",
+    "endDate": "2028-01-31",
+    "amount": "451000",
+    "currency": "USD",
+    "paymentTermsDays": 45,
+    "billingFrequency": "Annual"
+  },
+  "parties": {
+    "buyer": {
+      "name": "NovaFleet Technologies Inc.",
+      "address": "900 Enterprise Drive, Toronto, ON M5G 2C3, Canada",
+      "signaturePresent": true,
+      "signerName": "Daniel Wong",
+      "signerTitle": "Chief Financial Officer",
+      "signatureDate": "2025-01-10"
+    },
+    "vendor": {
+      "name": "SecureCloud Systems LLC",
+      "address": "1550 Innovation Way, Seattle, WA 98109, USA",
+      "signaturePresent": null,
+      "signerName": null,
+      "signerTitle": null,
+      "signatureDate": null
+    }
+  },
+  "typeDetails": {
+    "po_number": "PO-NF-88219",
+    "po_date": "2025-01-10"
+  },
+  "items": [
+    {
+      "productName": "Cloud Security Suite",
+      "itemStartDate": "2025-02-01",
+      "itemEndDate": "2026-01-31",
+      "quantity": "1",
+      "unitPrice": "120000",
+      "totalAmount": "120000"
+    },
+    {
+      "productName": "Cloud Security Suite",
+      "itemStartDate": "2026-02-01",
+      "itemEndDate": "2027-01-31",
+      "quantity": "1",
+      "unitPrice": "132000",
+      "totalAmount": "132000"
+    },
+    {
+      "productName": "Cloud Security Suite",
+      "itemStartDate": "2027-02-01",
+      "itemEndDate": "2028-01-31",
+      "quantity": "1",
+      "unitPrice": "145000",
+      "totalAmount": "145000"
+    },
+    {
+      "productName": "Advanced Threat Monitoring",
+      "itemStartDate": "2025-02-01",
+      "itemEndDate": "2028-01-31",
+      "quantity": "3",
+      "unitPrice": "18000",
+      "totalAmount": "54000"
+    }
+  ],
+  "specialTerms": [
+    {
+      "termType": "burst",
+      "percent": "15"
+    },
+    {
+      "termType": "technical_account_manager",
+      "percent": null
+    }
+  ]
+}

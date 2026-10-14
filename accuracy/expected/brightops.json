@@ -1,0 +1,43 @@
+{
+  "file": "Purchase Order – BrightOps Analytics Ltd.pdf",
+  "_note": "Hand-read from the PDF. Dates are ISO as stored; the API renders mm-dd-yyyy.",
+  "document": {
+    "docType": "purchase_order",
+    "customerSlug": "brightops",
+    "startDate": "2025-03-01",
+    "endDate": "2027-02-28",
+    "amount": "162000",
+    "currency": "USD",
+    "paymentTermsDays": 30,
+    "billingFrequency": "Annual"
+  },
+  "parties": {
+    "buyer": {
+      "name": "BrightOps Analytics Ltd.",
+      "address": "42 King George Street, London, UK",
+      "signaturePresent": true,
+      "signerName": "Emily Carter",
+      "signerTitle": "VP Finance",
+      "signatureDate": "2025-02-15"
+    },
+    "vendor": {
+      "name": "DataPulse Software Inc.",
+      "address": "789 Market Street, San Francisco, CA 94103, USA",
+      "signaturePresent": null,
+      "signerName": null,
+      "signerTitle": null,
+      "signatureDate": null
+    }
+  },
+  "typeDetails": { "po_number": "PO-BO-10458", "po_date": "2025-02-15" },
+  "items": [
+    { "productName": "Analytics Platform – Enterprise", "itemStartDate": "2025-03-01", "itemEndDate": "2026-02-28", "quantity": "1", "unitPrice": "72000", "totalAmount": "72000" },
+    { "productName": "Analytics Platform – Enterprise", "itemStartDate": "2026-03-01", "itemEndDate": "2027-02-28", "quantity": "1", "unitPrice": "78000", "totalAmount": "78000" },
+    { "productName": "Premium Support", "itemStartDate": "2025-03-01", "itemEndDate": "2026-02-28", "quantity": "1", "unitPrice": "6000", "totalAmount": "6000" },
+    { "productName": "Premium Support", "itemStartDate": "2026-03-01", "itemEndDate": "2027-02-28", "quantity": "1", "unitPrice": "6000", "totalAmount": "6000" }
+  ],
+  "specialTerms": [
+    { "termType": "burst", "percent": "10" },
+    { "termType": "technical_account_manager", "percent": null }
+  ]
+}
