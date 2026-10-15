@@ -1,6 +1,10 @@
 import { env } from '../config/env.ts';
 import { createApp } from '../api/server.ts';
-import { pool } from '../db/pool.ts';
+import { assertDatabaseConfigured, pool } from '../db/pool.ts';
+
+// Explicit, and before the listener binds: an api that answers while it cannot
+// reach Postgres is not serving.
+assertDatabaseConfigured();
 
 const server = createApp().listen(env.PORT, () => {
   console.log(JSON.stringify({

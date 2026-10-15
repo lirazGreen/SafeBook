@@ -1,5 +1,5 @@
 import { env } from '../config/env.ts';
-import { pool } from '../db/pool.ts';
+import { assertDatabaseConfigured, pool } from '../db/pool.ts';
 import { startWorkerLoop } from '../jobs/loop.ts';
 import { WORKER_ID } from '../jobs/repo.ts';
 import { startPollingTimer } from '../poller/loop.ts';
@@ -26,6 +26,8 @@ import { startPollingTimer } from '../poller/loop.ts';
  * failure mode is both total and silent-looking: every PDF simply goes to
  * `failed`.
  */
+assertDatabaseConfigured();
+
 if (env.LLM_MODE === 'fixture') {
   throw new Error(
     'LLM_MODE="fixture" cannot run the worker: a fixture key hashes the input text, ' +
