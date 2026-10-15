@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { fixtureKey, FixtureMissError } from '../../src/llm/fixtures.ts';
+import { fixtureKey, FixtureMissError, listFixtures } from '../../src/llm/fixtures.ts';
 import { isEscalatableField, SCHEMAS } from '../../src/llm/schemas.ts';
 
 /**
@@ -79,13 +79,68 @@ describe('output schemas', () => {
   });
 });
 
-describe('zero fixtures are needed while only POs are scored', () => {
-  it('neither PO escalates, so fixture mode passes with an empty fixture dir', async () => {
-    const { readdir } = await import('node:fs/promises');
-    const files = await readdir('tests/fixtures/llm').catch(() => [] as string[]);
-    const json = files.filter((f) => f.endsWith('.json'));
-    // If this ever fails it means a PO started escalating, which is a finding in
-    // itself — not something to paper over by adding a fixture.
-    expect(json).toEqual([]);
+describe('the recorded fixtures', () => {
+  it('cover exactly the five escalations, and nothing else', async () => {
+    // Recorded in one real run against claude-opus-5. This replaces an earlier
+    // assertion that the directory was EMPTY, which was correct while only the
+    // two POs were scored — neither escalates — and became wrong the moment the
+    // order forms entered the set.
+    const all = await listFixtures();
+    expect(all).toHaveLength(5);
+    expect(all.map((f) => f.request.field).sort()).toEqual([
+      'billing_frequency',        // CloudShield states it only in prose
+      'payment_terms_days',       // Acme
+      'payment_terms_days',       // CloudShield
+      'special_terms',            // Acme — numbered prose, no labels
+      'special_terms',            // CloudShield — eight paragraphs
+    ]);
+  });
+
+  it('are REAL recordings, not hand-written placeholders', async () => {
+    // The distinction the accuracy number rests on. A hand-written fixture would
+    // score the pipeline against an invention of what the model says, so
+    // `provisional` exists to mark one and nothing may carry it.
+    const all = await listFixtures();
+    expect(all.filter((f) => f.provisional === true)).toEqual([]);
+    for (const f of all) expect(f.request.model).toBe('claude-opus-5');
+  });
+
+  it('are keyed on the PROMPT, so editing one invalidates its recording', async () => {
+    // Keying on the field alone would replay an old response against a changed
+    // prompt: tests would pass while live behaviour differed, and the printed
+    // accuracy number would describe a prompt that no longer exists.
+    const all = await listFixtures();
+    for (const f of all) {
+      // The filename IS the key, and the key hashes the instruction — so a
+      // recorded file cannot be reused under a different prompt.
+      expect(f.request.instruction_sha).toBe(f.key);
+    }
+    expect(new Set(all.map((f) => f.key)).size).toBe(5);
+
+    // And the derivation is sensitive to the instruction, demonstrably: two
+    // calls differing ONLY in prompt text land on different keys.
+    const sample = all[0]!;
+    expect(fixtureKey(sample.request.field, sample.request.model, 'PROMPT A', sample.request.input))
+      .not.toBe(fixtureKey(sample.request.field, sample.request.model, 'PROMPT B', sample.request.input));
+  });
+
+  it('answered the hardest field in the set correctly', async () => {
+    // CloudShield's burst clause is ~190 words carrying three percentages, a
+    // 280,000-unit cap AND a $275,000 figure that is NOT the cap. "First
+    // percentage" and "first money value" both give wrong answers, so this is
+    // the one field where a real recording proves something a mock could not.
+    const all = await listFixtures();
+    const cloudshield = all
+      .filter((f) => f.request.field === 'special_terms')
+      .map((f) => f.response as { terms: { term_type: string; percent: number | null; cap_value: number | null }[] })
+      .find((r) => r.terms.some((t) => t.percent === 38.89));
+    expect(cloudshield).toBeDefined();
+
+    const burst = cloudshield!.terms.filter((t) => t.term_type === 'burst');
+    expect(burst.map((t) => t.percent).filter((p) => p !== null).sort((a, b) => b! - a!))
+      .toEqual([38.89, 28.21, 19.05]);
+    expect(burst.some((t) => t.cap_value === 280000)).toBe(true);
+    // and it did NOT mistake the Premium Support cap for the burst cap
+    expect(burst.some((t) => t.cap_value === 275000)).toBe(false);
   });
 });

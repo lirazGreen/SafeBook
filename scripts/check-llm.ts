@@ -33,7 +33,16 @@ switch (env.LLM_MODE) {
     console.log('A failed deterministic rule is flagged FIELD_NOT_FOUND and the document');
     console.log('still persists. No calls, no key needed — the documented degradation.');
     console.log('');
-    console.log('To let the service answer prose fields:  LLM_MODE=live in .env');
+    // Two different goals, and conflating them is easy: the earlier wording
+    // suggested only `live`, which reads as "you must change this first" even
+    // when the user is about to run accuracy:record — where the npm script sets
+    // the mode inline and .env is irrelevant.
+    console.log('This affects the RUNNING SERVICE only. To have it answer prose fields,');
+    console.log('set LLM_MODE=live in .env and restart the worker.');
+    console.log('');
+    console.log('A ONE-OFF recording needs no change here — the npm script sets the mode');
+    console.log('itself, and an explicit value beats .env:');
+    console.log('    npm run accuracy:record');
     break;
   case 'fixture':
     console.log('Escalations REPLAY a recorded response. A miss is a hard error, never a');

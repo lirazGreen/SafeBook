@@ -409,6 +409,48 @@ differently and one of them costs money per attempt:
 - **LLM budget cap per document** (tracked in `extraction_runs.llm_calls`) so one pathological
   file cannot burn an unbounded number of calls inside a single attempt.
 
+## Recording the fixtures — what one real run changed
+
+The nine prose values were outstanding for three phases. One run against `claude-opus-5`
+resolved all five escalations and the score went **230/239 → 239/239**, reproducible offline with
+no key (verified with `ANTHROPIC_API_KEY=` empty and with the API host pointed at a dead address).
+
+**It found a bug 292 tests had not.** The design called for server-side `fallbacks`, and the very
+first real call rejected it:
+
+```
+400 invalid_request_error — "fallbacks: Extra inputs are not permitted"
+```
+
+That line had never executed. It typechecked, and every test around it passed against mocks
+returning shapes *I* had decided the SDK would produce — which I had checked against the bundled
+SDK reference rather than recalled, and which was still wrong. Removing it was the fix; the
+lesson is that **verified-from-documentation is not the same as executed**, and the only way to
+close that gap is to run the thing once.
+
+**And a bug in the harness's own self-check.** `_escalates` is validated by asking "did the
+deterministic rule answer a field declared as escalating?", and the runner used `llmCalls > 0` as
+the proxy for "an escalator ran". A fixture REPLAY answers the field while making zero calls — so
+the check concluded no escalator had run and flagged all five recorded answers as stale
+declarations. `escalations` and `llmCalls` exist precisely to keep that distinction, and this line
+conflated them. Fixed to use `escalations`.
+
+**Two tests failed, correctly.** One asserted the fixture directory was EMPTY (right while only
+the POs were scored); one asserted the two order forms fail with `LLM_FIXTURE_MISSING` (right
+while nothing was recorded). Both broke the moment the fixtures landed, which is the behaviour
+wanted from an assertion that encodes a temporary state.
+
+**The model got the hardest field right.** CloudShield's Burst clause carries 38.89%, 28.21%,
+19.05%, a 280,000-unit cap and a `$275,000` figure that is *not* the cap. It returned three
+item-scoped burst rows with the right percentages, the right cap, and did **not** mistake the
+Premium Support figure for it. "First percentage" and "first money value" both give wrong answers
+there, which is why no mock could have proven this.
+
+**`npm run accuracy` now pins `LLM_MODE=fixture`.** It had inherited `off` from `.env`, which was
+harmless while only the POs were scored and became load-bearing the moment an order form entered
+the set — `off` builds no escalator, so the recorded answers were never replayed and the harness
+reported 230/239 with fixtures sitting on disk. Flagged as a phase-7 risk two phases earlier, and
+this is where it bit.
 ## Database schema
 
 > The README has a shorter table-by-table tour of the same schema, aimed at a
@@ -2014,18 +2056,8 @@ Purchase Order – NovaFleet Technologies Inc.pdf
   48/48 (100.0%)  escalated: none  api calls: 0  review: (none)
 
 ======================================================================
-  230 / 239 scored values  =  96.2%
-  9 pending — fields that must escalate, with no fixture recorded yet
-
-  KPI >=95%, counting every pending value as WRONG:  PASS  (96.2%)
-    needs >=228 of 239 passing; 230 pass, 0 wrong, 9 unanswered (tolerates 11 wrong)
-    This is the WORST CASE — the model gets no credit at all — and it is a
-    FLOOR: recording a fixture can only raise this number or leave it, never
-    lower it, because a pending value was never counted as passing.
-
-  Not yet EXACT. Record the fixtures once, with a key, and those
-  9 values get scored on what the model actually returns:
-      LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy
+  239 / 239 scored values  =  100.0%
+  KPI is >=95%: PASS  (allows 11 wrong, 0 wrong)
 ======================================================================
 ```
 
@@ -2493,7 +2525,7 @@ closing case asserts the only unanswered field on either document is the **prose
 Both POs still score **48/48** and make **zero** LLM calls, so none of this leaked into the
 documents that were already passing.
 
-### Phase 7 — the order forms in the scored set ✅ (fixtures pending a key)
+### Phase 7 — the order forms in the scored set ✅
 
 Both order forms are now scored, and **every deterministic value on all four documents is
 correct: 230 / 239, 0 wrong.** The nine outstanding values are the prose fields, which need one

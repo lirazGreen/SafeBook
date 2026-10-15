@@ -97,8 +97,12 @@ describe('the KPI', () => {
     // than the brief set; counting them in the denominator but never as a pass
     // means the figure can only RISE when the fixtures are recorded — a recorded
     // pass raises it, a recorded failure leaves it exactly where it is.
+    // Holds in BOTH states, which is the point: the invariant is about the
+    // bookkeeping, not about whether anything is outstanding. Asserting
+    // `passed < total` unconditionally was wrong — it only held while fixtures
+    // were missing, and broke the moment they were recorded.
     expect(t.passed + t.failed + t.pending).toBe(t.total);
-    expect(t.passed).toBeLessThan(t.total);          // pending are not counted as passes
+    if (t.pending > 0) expect(t.passed).toBeLessThan(t.total);
 
     // the floor property, stated arithmetically
     const ifAllPendingPass = (t.passed + t.pending) / t.total;

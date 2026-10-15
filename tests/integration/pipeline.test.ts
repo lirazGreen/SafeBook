@@ -139,28 +139,32 @@ describe('folder -> queue -> database', () => {
 
     const settled = await settleAll();
 
-    // Two extract completely. Both order forms stop on a missing LLM fixture —
-    // the test runner pins LLM_MODE to `fixture` and nothing is recorded — and
-    // are NOT retried, because the recording is absent and three more attempts
-    // would find it just as absent while looking like flakiness.
-    expect(settled.extracted + settled.failed.length).toBe(4);
-    expect(settled.failed).toEqual(['LLM_FIXTURE_MISSING', 'LLM_FIXTURE_MISSING']);
+    // ALL FOUR extract completely, including the two order forms whose prose
+    // fields escalate — their recorded fixtures are replayed, so no call is made
+    // and nothing needs a key.
+    //
+    // This assertion previously expected two LLM_FIXTURE_MISSING failures, which
+    // was correct when nothing had been recorded. It failed the moment the
+    // fixtures landed, which is the test doing its job.
+    expect(settled.failed).toEqual([]);
+    expect(settled.extracted).toBe(4);
     const { rows } = await pool.query<{ slug: string; doc_type: string; amount: string; currency: string; items: string; ingress: string }>(
       `SELECT c.slug, d.doc_type, d.amount, d.currency, d.ingress,
               (SELECT count(*) FROM document_items i WHERE i.document_id = d.id) AS items
          FROM documents d JOIN customers c ON c.id = d.customer_id
-        WHERE d.id = ANY($1::bigint[]) AND d.amount IS NOT NULL ORDER BY c.slug`,
+        WHERE d.id = ANY($1::bigint[]) ORDER BY c.slug`,
       [created],
     );
     // Routed by CONTENT. The filenames play no part — one even misspells "Form",
     // and two are named after the buyer while two are named after the vendor.
     expect(rows.map((r) => [r.slug, r.doc_type, Number(r.amount), r.currency, Number(r.items), r.ingress])).toEqual([
+      ['acme', 'order_form', 152500, 'USD', 5, 'poll'],
       ['brightops', 'purchase_order', 162000, 'USD', 4, 'poll'],
+      ['cloudshield', 'order_form', 23640000, 'USD', 6, 'poll'],
       ['novafleet', 'purchase_order', 451000, 'USD', 4, 'poll'],
     ]);
 
-    // The two that failed are registered, archived and marked — never half
-    // written and never silently absent.
+    // Every one archived — never half written and never silently absent.
     const { rows: all } = await pool.query<{ n: string }>(
       `SELECT count(*) AS n FROM documents
         WHERE id = ANY($1::bigint[]) AND storage_key IS NOT NULL`,

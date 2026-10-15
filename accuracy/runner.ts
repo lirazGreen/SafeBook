@@ -80,7 +80,12 @@ export async function scoreAll(): Promise<Scored[]> {
     const slug = result.customerId === null ? null : slugById.get(result.customerId) ?? null;
     out.push({
       expected, result, fixtureMiss,
-      comparisons: compareDocument(expected, result, slug, ranWithEscalator && result.llmCalls > 0),
+      // `escalations`, NOT `llmCalls`: a fixture REPLAY answers the field while
+      // making zero calls, so llmCalls > 0 reported "no escalator ran" and the
+      // self-check then flagged all five recorded answers as stale declarations.
+      // This is the exact distinction the two fields exist to keep apart, and the
+      // first version of this line conflated them.
+      comparisons: compareDocument(expected, result, slug, ranWithEscalator && result.escalations.length > 0),
     });
   }
   return out;

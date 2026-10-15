@@ -1,0 +1,32 @@
+{
+  "request": {
+    "field": "special_terms",
+    "model": "claude-opus-5",
+    "instruction_sha": "4b3d0d31826da91f804c829d",
+    "input": "Special Terms\n1. During each consecutive 24 months of the Subscription Term described in this Order, Customer shall have\nthe right to utilize up to 5% more Billable Units in connection with SaaS subscription than those listed in the\ntable above (the “Burst Threshold”), at no additional cost.\n2. Customer will be assigned a Customer Support Manager and Product Architect"
+  },
+  "response": {
+    "terms": [
+      {
+        "term_type": "burst",
+        "ordinal": 1,
+        "percent": 5,
+        "cap_value": null,
+        "cap_unit": "Billable Units",
+        "period": "24_months",
+        "applies_to": "SaaS subscription",
+        "quote": "the right to utilize up to 5% more Billable Units in connection with SaaS subscription than those listed in the\ntable above (the “Burst Threshold”), at no additional cost."
+      },
+      {
+        "term_type": "technical_account_manager",
+        "ordinal": 2,
+        "percent": null,
+        "cap_value": null,
+        "cap_unit": null,
+        "period": null,
+        "applies_to": null,
+        "quote": "Customer will be assigned a Customer Support Manager and Product Architect"
+      }
+    ]
+  }
+}

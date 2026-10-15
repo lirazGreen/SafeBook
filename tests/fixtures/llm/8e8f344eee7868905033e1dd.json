@@ -1,0 +1,13 @@
+{
+  "request": {
+    "field": "payment_terms_days",
+    "model": "claude-opus-5",
+    "instruction_sha": "8e8f344eee7868905033e1dd",
+    "input": "Payment Terms\nAll payments shall be paid to the applicable Azure cloud marketplace. Payment will be made annually (at the\nbeginning of each subscription year) and as agreed between Customer and the cloud marketplace. Payment\nwill be made within forty-five (45) days of Customer's receipt of an invoice. To extent within CloudShield's\nreasonable control and, to the extent Service Provider is required by Applicable Law to collect taxes for which\nTechNova Solutions is responsible, CloudShield will separately state on the invoice the amount of taxes and the\njurisdiction(s) for which the taxes are being collected.\nNotwithstanding the Agreement and/or anything to the contrary, Customer may not terminate this Order for\nconvenience."
+  },
+  "response": {
+    "value": 45,
+    "quote": "Payment\nwill be made within forty-five (45) days of Customer's receipt of an invoice.",
+    "not_found_reason": null
+  }
+}

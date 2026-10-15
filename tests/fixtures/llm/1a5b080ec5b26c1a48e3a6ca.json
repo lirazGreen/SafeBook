@@ -1,0 +1,132 @@
+{
+  "request": {
+    "field": "special_terms",
+    "model": "claude-opus-5",
+    "instruction_sha": "1a5b080ec5b26c1a48e3a6ca",
+    "input": "Special Terms\n1. During each consecutive 12 months of the Subscription Term described in this Order, in addition to\nCloudShield Enterprise, Customer will be entitled to utilize CloudShield Sensor, up to the Burst Threshold\n(defined below) at no additional cost. \"Burst Threshold\" means the following percentage of the quantity of\nCloudShield Enterprise Billable Units purchased by Customer, taking into account any reductions in\nCloudShield Enterprise Billable Units due to conversions as described in Section 4 below: (a) during Year 1, up\nto 38.89%, (b) during Year 2, up to 28.21%, and (c) during Year 3, up to 19.05%; provided that in no event shall\nthe Burst Threshold exceed 280,000 Billable Units during any Subscription Year. CloudShield shall have the\nright to review Customer's actual Billable Unit usage, and in the event such usage exceeds the Burst Threshold,\nCloudShield shall have the right to notify Customer in writing of and provide a true-up order for such excess\nusage (a \"Workload True-Up\"). Following receipt from CloudShield of a Workload True-Up, Customer agrees to\npurchase, with respect to the period from the date of the Workload True-Up until the Subscription End Date (the\n\"True-Up Period\"), additional Billable Units in an amount equal to the quantity of Billable Units utilized in excess\nof the amount previously purchased by Customer. Notwithstanding Customer's purchase of additional Billable\nUnits, during the Subscription Term described in this Order, Premium Support shall be capped at fixed rate of\n$275,000 per year. During the Subscription Term of this Order, Billable Units shall be calculated according to\nExhibit A.\n2. Customer shall receive a free trial of CloudShield Code, up to maximum of 4,000 active developers, for 12\nmonths, commencing on March 1, 2025 and ending on February 28, 2026.\n3. During the Subscription Term (specified in this Order), Customer may elect to purchase additional Billable\nUnits for its CloudShield Enterprise subscriptions at the incremental tiered Billable Unit rates listed below:\nCloudShield Enterprise: 1-210,000 cloud workloads - $39/workload/year 210,001-320,000 cloud workloads -\n$35/workload/year 320,001+ cloud workloads - $31/workload/year\n4. During the Subscription Term of this Order, once per annual term, if requested by Customer, Customer shall\nhave the right to convert Billable Units of CloudShield Enterprise to Billable Units of CloudShield Code based on\na ratio of 10 CloudShield Enterprise cloud workloads to 1 CloudShield Code active developers. Provided that\nupon request for any such conversion, prior to such conversion taking place, the Parties will enter into an\namendment and/or new Order to reflect the revised allocation of Billable Units. For the avoidance of doubt, the\nconversion rights set forth herein shall not apply to any additional Billable Units available to Customer under the\nBurst Threshold.\n5. If Customer elects to extend or renew its CloudShield Enterprise subscription under this Order, during the\nfirst consecutive renewal subscription term (which may be any combination of 12 month term lengths, but shall\nnot exceed, in the aggregate, a total of 36 months), CloudShield will not increase the applicable monthly/unit\nprice per Billable Unit for such CloudShield Enterprise subscription by the lesser of (a) five percent (5%) of the\nmonthly/unit price set forth in this Order, or the (b) the increase, if any, in the CPI (defined below) in effect for\nthe month that is three months before the Subscription End Date. \"CPI\" means the Consumer Price Index for All\nUrban Consumers (CPI-U), U.S. City Average, All items, not seasonally adjusted, 1982–1984=100 reference\nbase, published by the United States Department of Labor, Bureau of Labor Statistics.\n6. On the first consecutive 36 months renewal, provided that Customer commits to a minimum purchase of\n210,000 cloud workloads in the first subscription year, followed by a 5% increase every year of the applicable"
+  },
+  "response": {
+    "terms": [
+      {
+        "term_type": "burst",
+        "ordinal": 1,
+        "percent": 38.89,
+        "cap_value": null,
+        "cap_unit": "Billable Units",
+        "period": "subscription_year",
+        "applies_to": "CloudShield Sensor",
+        "quote": "to 38.89%"
+      },
+      {
+        "term_type": "burst",
+        "ordinal": 1,
+        "percent": 28.21,
+        "cap_value": null,
+        "cap_unit": "Billable Units",
+        "period": "subscription_year",
+        "applies_to": "CloudShield Sensor",
+        "quote": "during Year 2, up to 28.21%"
+      },
+      {
+        "term_type": "burst",
+        "ordinal": 1,
+        "percent": 19.05,
+        "cap_value": null,
+        "cap_unit": "Billable Units",
+        "period": "subscription_year",
+        "applies_to": "CloudShield Sensor",
+        "quote": "during Year 3, up to 19.05%"
+      },
+      {
+        "term_type": "burst",
+        "ordinal": 1,
+        "percent": null,
+        "cap_value": 280000,
+        "cap_unit": "Billable Units",
+        "period": "subscription_year",
+        "applies_to": "CloudShield Sensor",
+        "quote": "the Burst Threshold exceed 280,000 Billable Units during any Subscription Year"
+      },
+      {
+        "term_type": "unknown",
+        "ordinal": 1,
+        "percent": null,
+        "cap_value": 275000,
+        "cap_unit": "USD per year",
+        "period": "subscription_year",
+        "applies_to": "Premium Support",
+        "quote": "$275,000 per year"
+      },
+      {
+        "term_type": "free_trial",
+        "ordinal": 2,
+        "percent": null,
+        "cap_value": 4000,
+        "cap_unit": "active developers",
+        "period": null,
+        "applies_to": "CloudShield Code",
+        "quote": "free trial of CloudShield Code, up to maximum of 4,000 active developers"
+      },
+      {
+        "term_type": "tiered_pricing",
+        "ordinal": 3,
+        "percent": null,
+        "cap_value": 39,
+        "cap_unit": "$/workload/year",
+        "period": null,
+        "applies_to": "CloudShield Enterprise",
+        "quote": "1-210,000 cloud workloads - $39/workload/year"
+      },
+      {
+        "term_type": "tiered_pricing",
+        "ordinal": 3,
+        "percent": null,
+        "cap_value": 35,
+        "cap_unit": "$/workload/year",
+        "period": null,
+        "applies_to": "CloudShield Enterprise",
+        "quote": "$35/workload/year"
+      },
+      {
+        "term_type": "tiered_pricing",
+        "ordinal": 3,
+        "percent": null,
+        "cap_value": 31,
+        "cap_unit": "$/workload/year",
+        "period": null,
+        "applies_to": "CloudShield Enterprise",
+        "quote": "320,001+ cloud workloads - $31/workload/year"
+      },
+      {
+        "term_type": "conversion_right",
+        "ordinal": 4,
+        "percent": null,
+        "cap_value": null,
+        "cap_unit": null,
+        "period": null,
+        "applies_to": "CloudShield Enterprise",
+        "quote": "a ratio of 10 CloudShield Enterprise cloud workloads to 1 CloudShield Code active developers"
+      },
+      {
+        "term_type": "renewal_cap",
+        "ordinal": 5,
+        "percent": 5,
+        "cap_value": null,
+        "cap_unit": null,
+        "period": null,
+        "applies_to": "CloudShield Enterprise",
+        "quote": "five percent (5%)"
+      },
+      {
+        "term_type": "renewal_cap",
+        "ordinal": 6,
+        "percent": 5,
+        "cap_value": null,
+        "cap_unit": null,
+        "period": null,
+        "applies_to": null,
+        "quote": "followed by a 5% increase every year"
+      }
+    ]
+  }
+}

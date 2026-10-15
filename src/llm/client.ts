@@ -116,8 +116,17 @@ export function buildEscalator(opts: BuildEscalatorOptions): Escalator | null {
       },
       // NOTE: no `temperature`. It is REMOVED on this model family and returns
       // a 400. Determinism for tests comes from the fixture cache instead.
-      betas: ['server-side-fallback-2026-07-01'],
-      fallbacks: 'default',
+      //
+      // NOTE: no `fallbacks` / `betas` either. The design called for server-side
+      // fallbacks, and the very first real call rejected it:
+      //
+      //   400 invalid_request_error — "fallbacks: Extra inputs are not permitted"
+      //
+      // Which is the whole argument for recording the fixtures rather than
+      // reasoning about the request shape: this line had never executed, so it
+      // typechecked, passed 289 tests against mocks, and was wrong. Fallbacks are
+      // a routing optimisation, not something extraction depends on, so it is
+      // removed rather than chased.
     } as never);
 
     // A refusal arrives as HTTP 200 with stop_reason 'refusal', so stop_reason

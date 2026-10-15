@@ -112,7 +112,7 @@ accuracy number reproducible from a fresh clone:
 ```bash
 npm install
 npm run accuracy    # scores the real pipeline against hand-read ground truth
-npm test            # 289 tests; the 39 that need Postgres skip themselves, with a reason
+npm test            # 292 tests; the 39 that need Postgres skip themselves, with a reason
 ```
 
 ---
@@ -120,49 +120,82 @@ npm test            # 289 tests; the 39 that need Postgres skip themselves, with
 ## Accuracy
 
 ```
-  230 / 239 scored values  =  96.2%
-  9 pending — fields that must escalate, with no fixture recorded yet
-
-  KPI >=95%, counting every pending value as WRONG:  PASS  (96.2%)
-    needs >=228 of 239 passing; 230 pass, 0 wrong, 9 unanswered (tolerates 11 wrong)
+  239 / 239 scored values  =  100.0%
+  KPI is >=95%: PASS  (allows 11 wrong, 0 wrong)
 ```
 
-**The brief's ≥95% is met with no API key, and nothing is wrong.** Every value that can be
-extracted without a language model is correct on all four documents — document fields, both
-parties, type-specific details, every item column and every special term.
+Every scored value on all four documents: document fields, both parties, type-specific details,
+every item column and every special term.
 
-Two things make that figure trustworthy rather than flattering:
+**Reproducible from a clone with no API key and no network.** `npm run accuracy` replays recorded
+model responses from `tests/fixtures/llm/` and makes **zero** calls — verified by running it with
+`ANTHROPIC_API_KEY=` empty and again with the API base URL pointed at a dead address. Both print
+100%.
 
-- **Pending values are counted in the denominator, never as a pass.** A "≥95%" computed over
-  only the fields that did not need a model would be a claim about a *smaller problem than the
-  brief set*, so the nine prose values count against the score even though nothing has tried to
-  answer them yet.
-- **It is therefore a floor, not a provisional figure.** Recording a fixture turns a pending
-  value into a pass or a fail; a pass raises the number, a fail leaves it exactly where it is.
-  **It cannot go down.**
+```
+ACME Order From.pdf
+  65/65 (100.0%)  escalated: payment_terms_days,special_terms   api calls: 0
+CloudShield Order Form.pdf
+  78/78 (100.0%)  escalated: payment_terms_days,billing_frequency,special_terms   api calls: 0
+```
 
-### What is still outstanding, and why
+`escalated` and `api calls` are separate columns on purpose: those fields *did* need the model —
+their deterministic rules correctly failed — and the recording answers them without a call. The
+two POs escalate nothing at all, because `Net 30` / `Net 45` and their labelled special-term
+bullets parse.
 
-Nine values across the two order forms: payment terms on both, CloudShield's billing frequency,
-and the Burst / TAM special terms. These are the fields stated only in prose — *"Payment shall be
-made within thirty (30) days from invoice"* — so the deterministic rule correctly fails and the
-field escalates. With no key configured, nothing answers, the value stays `NULL` and the document
-is flagged `needs_review`. That is the documented graceful degradation, not a failure.
+### The fixtures are real recordings, not hand-written
 
-Making the number **exact** rather than a floor takes one recording run:
+One run against `claude-opus-5` produced all five. That distinction is what the number rests on:
+a hand-written fixture would score the pipeline against an *invention* of what the model says, so
+the printed figure would describe my imagination rather than the system. Four assertions in
+`tests/unit/llmModes.test.ts` hold the line — exactly five fixtures, none marked `provisional`,
+all recorded against the configured model, and each keyed on a hash of its **prompt**, so editing
+an instruction invalidates its recording instead of silently replaying a stale answer.
+
+The model got the hardest field in the set right. CloudShield's Burst clause is ~190 words
+carrying three different percentages, a 280,000-unit cap, **and** a `$275,000` figure that is *not*
+the cap:
+
+```
+burst 38.89  → CloudShield Sensor
+burst 28.21  → CloudShield Sensor
+burst 19.05  → CloudShield Sensor
+burst        → cap 280000 Billable Units
+```
+
+"First percentage" and "first money value" both give wrong answers there, which is why this is
+the one field a mock could not have proven.
+
+### What recording the fixtures found
+
+A bug that 292 tests had not. The design called for server-side `fallbacks`, and the **first real
+call** rejected it:
+
+```
+400 invalid_request_error — "fallbacks: Extra inputs are not permitted"
+```
+
+That line had never executed. It typechecked, and every test around it passed against mocks
+returning shapes *I* had decided the SDK would produce. Removing it was the fix — fallbacks are a
+routing optimisation, not something extraction depends on — but the lesson is the general one:
+verified-from-documentation is not the same as executed.
+
+### Re-recording
+
+Only needed after editing a prompt, since the key hashes the instruction:
 
 ```bash
 LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy   # or: npm run accuracy:record
 ```
 
-Five calls, roughly 20–30 cents. The recorded responses commit as fixtures, after which
-`npm test` and `npm run accuracy` keep replaying them offline forever — which is the point: a
-fixture has to be a **frozen real response**. Hand-writing them would mean scoring the pipeline
-against a guess at what the model says, so the printed number would describe an invention rather
-than the system.
+Five calls, roughly 25 cents. Note that this is **not** needed to run the service against real
+documents — see [Letting it answer the prose fields](#letting-it-answer-the-prose-fields). A
+fixture key hashes the input text, so a genuinely new document can only ever *miss*; fixtures
+exist so the tests and this number are offline and deterministic, not to serve production.
 
-Every item table reconciles exactly against its stated total, which is the check that makes the
-rest trustworthy:
+Every item table also reconciles exactly against its stated total, which is the check that makes
+the rest trustworthy:
 
 | | Σ items | stated |
 |---|---|---|
@@ -457,7 +490,7 @@ and the point of `NUMERIC` is defeated if anything parses it on the way through.
 ## Testing
 
 ```bash
-npm test            # 289 tests
+npm test            # 292 tests
 npm run accuracy    # the scored number
 npm run typecheck
 npm run lint:api
@@ -488,7 +521,7 @@ Stated plainly, because a reviewer should not have to discover them.
 | | |
 |---|---|
 | **Image-only scanned PDFs are not supported.** | Detected as `NO_TEXT_LAYER` and failed fast rather than silently mis-extracted as an empty document. The mitigation needs no pipeline change — PDF-direct base64 input to the model's vision — but it is not built. |
-| **Nine prose values await one recording run with an API key.** | The brief's ≥95% is already met without one (230/239, 0 wrong) and that figure is a FLOOR, not a subset — but it is not yet EXACT. See [Accuracy](#accuracy). |
+| **The scored number replays recorded responses, not live calls.** | 239/239 reproduces offline with no key, which is the point — but it pins the model's answers as of one recording. A prompt edit invalidates them by design (the key hashes the instruction); a model change would want a re-record. See [Accuracy](#accuracy). |
 | **No UI beyond Swagger.** | The brief's deliverable is a repo and a README. `/docs` renders a real file picker for the multipart upload, so the samples can be submitted from a browser and results browsed — which covers most of what a read-only page would have. |
 | **No authentication.** | Out of scope for the assignment. Every endpoint is open, and `GET /jobs/{id}` exposes a worker hostname. This is not deployable as-is. |
 | **One document type pair.** | A third type (invoice, SOW, amendment) needs a migration: a new enum value and a new field catalog. |

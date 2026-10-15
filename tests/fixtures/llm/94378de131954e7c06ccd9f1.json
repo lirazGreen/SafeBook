@@ -1,0 +1,13 @@
+{
+  "request": {
+    "field": "payment_terms_days",
+    "model": "claude-opus-5",
+    "instruction_sha": "94378de131954e7c06ccd9f1",
+    "input": "Payment Terms: Payment of the Total Subscription Fee shall be made in advance of such period. Payment shall be\nmade within thirty (30) days from invoice.\n\nTerms and Conditions\nBilling Frequency: Annual\nPayment Terms: Payment of the Total Subscription Fee shall be made in advance of such period. Payment shall be\nmade within thirty (30) days from invoice."
+  },
+  "response": {
+    "value": 30,
+    "quote": "made within thirty (30) days from invoice",
+    "not_found_reason": null
+  }
+}
