@@ -12,3 +12,10 @@ failed/*
 !failed/.gitkeep
 
 .DS_Store
+
+# The assignment brief is the assigner's own document, not ours to republish.
+# The four PDFs under "sample docs/" ARE tracked on purpose: npm run accuracy and
+# the integration tests read them, so a reviewer can clone the repo and reproduce
+# the printed number. "sample docs.zip" is only a duplicate of that folder.
+Assignement - Document Data Extraction.pdf
+sample docs.zip
