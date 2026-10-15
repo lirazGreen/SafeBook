@@ -104,48 +104,6 @@ further configuration. Locally, `src/config/dotenv.ts` loads the file, and a var
 present in the environment **wins** — so `LLM_MODE=record npm run accuracy` is not silently
 overridden by `.env`.
 
-### Processing documents you have never seen
-
-**You cannot know in advance whether a new document needs the model** — that is the premise the
-whole deterministic-first design rests on, and it applies to deployment too. So for real use the
-key is an operational dependency, not an optional extra:
-
-| mode | a new document |
-|---|---|
-| **`live`** + key | the correct configuration. Labelled fields come from rules at no cost; prose fields escalate and are answered |
-| **`off`** | everything the rules can reach is extracted; prose fields are `NULL` + `FIELD_NOT_FOUND` + `needs_review`. Nothing breaks |
-| **`fixture`** | **refused at boot.** A fixture key hashes the input text, so a new document can only *miss*, and a miss is classed permanent — the **whole document** fails, not just its prose field. `off` degrades; `fixture` destroys |
-
-`off` is for a reviewer cloning the repo without an API account, for CI, and for keeping the
-service *running* through a key outage or rotation. It is not a configuration for processing
-unknown documents.
-
-#### Recovering what was missed
-
-There is an asymmetry here worth knowing, because only one half self-heals:
-
-| | recovers on its own? |
-|---|---|
-| Key present, API unreachable → `LLM_UNAVAILABLE` | **yes** — classed transient, so backoff retries and the fields are recovered |
-| Key **absent** → `FIELD_NOT_FOUND` | **no** — nothing *failed*, so nothing retries. A silent partial loss |
-
-Once a key is in place, pick those up by **reason** rather than by status:
-
-```bash
-curl -X POST 'localhost:3000/documents/reprocess?reason=FIELD_NOT_FOUND'
-```
-
-`?status=needs_review` would also re-run every document in review for an unrelated reason —
-a reconciliation mismatch, an ambiguous currency — and re-bill each one.
-
-#### If other people are testing it
-
-**Do not share your key.** Each tester should use their own, or run `off`. And set a spend limit
-in the Anthropic console first: each escalating document is a few cents, but
-`POST /documents/reprocess` has **no authentication**, so anyone who can reach the port can
-re-bill the entire corpus. That is the auth gap in [Limitations](#limitations) turning into a
-cost risk rather than a theoretical one.
-
 ### Without Docker
 
 Two things run with **no database and no API key**, which is deliberate — it is what makes the
@@ -247,6 +205,139 @@ the rest trustworthy:
 | NovaFleet | 120,000 + 132,000 + 145,000 + 54,000 | **451,000** ✓ |
 
 ---
+
+## Trying it with your own documents
+
+Drop any PDF into `inbox/` and it is picked up within a poll interval. **Nothing needs to be
+configured first** — not the customer, not the document type, not the layout. What varies is how
+much comes out, and what you do about the rest.
+
+Set a key first (`LLM_MODE=live`, see [above](#letting-it-answer-the-prose-fields)): you cannot
+know in advance whether a document states its payment terms as `Net 30` or as *"within thirty
+(30) days"*, so running without one guarantees you will eventually see fields flagged for a
+reason that has nothing to do with the document.
+
+### What to expect, by case
+
+| | what happens | likely outcome |
+|---|---|---|
+| **Existing customer, same doc type** | matched by name or pattern; their own profile applies | `extracted`. A field that changed wording comes back null — that is the drift case, below |
+| **New customer, Purchase Order** | issuer inferred from the title **and** `Company Name:` under the Buyer heading — two independent sources agreeing | usually `extracted` straight away, from `purchase_order/_base.yaml` alone. `customer_resolution: unmatched` and a populated `detectedIssuerName` |
+| **New customer, Order Form** | order forms never label their vendor, so the issuer is derived by **subtraction**: the shared signature line minus the buyer | same, plus the prose fields which need the key |
+| **Existing customer, a type they have not sent before** | profiles are keyed `(customer, doc_type)`, so this resolves to the base profile for that type | works; add a customer profile file only if the base one misses something |
+
+`unmatched` is not an error — it means *"extracted with the base profile, and here is who I think
+sent it"*. NovaFleet scores **48/48 from the base profile with no customer file at all**, which is
+the evidence that an unfamiliar customer is cheap rather than special.
+
+### Which mode, and what each does with an unseen document
+
+**You cannot know in advance whether a new document needs the model** — that is the premise the
+whole deterministic-first design rests on, and it applies to deployment too. So for real use the
+key is an operational dependency, not an optional extra:
+
+| mode | a new document |
+|---|---|
+| **`live`** + key | the correct configuration. Labelled fields come from rules at no cost; prose fields escalate and are answered |
+| **`off`** | everything the rules can reach is extracted; prose fields are `NULL` + `FIELD_NOT_FOUND` + `needs_review`. Nothing breaks |
+| **`fixture`** | **refused at boot.** A fixture key hashes the input text, so a new document can only *miss*, and a miss is classed permanent — the **whole document** fails, not just its prose field. `off` degrades; `fixture` destroys |
+
+`off` is for a reviewer cloning the repo without an API account, for CI, and for keeping the
+service *running* through a key outage or rotation. It is not a configuration for processing
+unknown documents.
+
+#### Recovering what was missed
+
+There is an asymmetry here worth knowing, because only one half self-heals:
+
+| | recovers on its own? |
+|---|---|
+| Key present, API unreachable → `LLM_UNAVAILABLE` | **yes** — classed transient, so backoff retries and the fields are recovered |
+| Key **absent** → `FIELD_NOT_FOUND` | **no** — nothing *failed*, so nothing retries. A silent partial loss |
+
+Once a key is in place, pick those up by **reason** rather than by status:
+
+```bash
+curl -X POST 'localhost:3000/documents/reprocess?reason=FIELD_NOT_FOUND'
+```
+
+`?status=needs_review` would also re-run every document in review for an unrelated reason —
+a reconciliation mismatch, an ambiguous currency — and re-bill each one.
+
+#### If other people are testing it
+
+**Do not share your key.** Each tester should use their own, or run `off`. And set a spend limit
+in the Anthropic console first: each escalating document is a few cents, but
+`POST /documents/reprocess` has **no authentication**, so anyone who can reach the port can
+re-bill the entire corpus. That is the auth gap in [Limitations](#limitations) turning into a
+cost risk rather than a theoretical one.
+
+### Then look at what it decided
+
+```bash
+curl -s localhost:3000/documents | jq '.documents[0]'
+curl -s localhost:3000/documents/1/trace | jq      # every value + the text it came from
+curl -s localhost:3000/documents/1/runs  | jq      # what the previous attempts produced
+```
+
+`/trace` is the one to reach for. It re-slices `raw_text` at each recorded offset and reports
+`evidenceVerified`, so a wrong value tells you immediately whether the locator found the wrong
+text or the normaliser mangled the right text.
+
+### If something is flagged
+
+`status` is `needs_review` and `reviewReasons` says why. Each one has a specific fix:
+
+| reason | what it means | what to do |
+|---|---|---|
+| `FIELD_NOT_FOUND` | a rule failed **and** nothing answered the escalation | usually no key. Set one, then `POST /documents/reprocess?reason=FIELD_NOT_FOUND` |
+| `UNMATCHED_CUSTOMER` | nobody registered matches the inferred issuer | add them to `config/customers.yaml`, `npm run seed` — the backlog re-resolves itself. Or `PATCH /documents/{id} {"customerId":N}` for a one-off |
+| `AMBIGUOUS_CUSTOMER` | two patterns matched | make one pattern more specific. Resolution is a *count*, so it will not guess |
+| `UNMAPPED_COLUMNS` | the item table has a column header no synonym covers | add it under `items.column_synonyms` in that customer's profile |
+| `TOTAL_MISMATCH` | `Σ items ≠ amount` | the table reconstruction mis-read a row. Check `/trace` and the item rows; this is the check that catches a bad parse rather than letting it through |
+| `ITEM_ARITHMETIC` | a row's `quantity × unit_price ≠ total` | the customer may price per period, like CloudShield. Declare `items.reconcile` and a tolerance |
+| `AMBIGUOUS_CURRENCY` | a bare `$` and no single ISO code in the document | set `default_currency` in that customer's profile. It is never inferred from an address |
+| `MIXED_CURRENCY` | more than one currency in one document | expected, not a defect — subtotals are compared per currency |
+| `DATE_ENVELOPE_MISMATCH` | the stated dates disagree with `min`/`max` of the item dates | one side was misread. Often a date format needing `input_format` declared |
+| `DATE_OUT_OF_RANGE` | outside 1990–2050 | almost always a format mis-parse rather than a real date |
+| `INFERRED_VALUES` | an item value was filled down from the row above | check it. Money and `product_name` are never filled down, so this is a date or an attribute |
+| `LLM_EVIDENCE_MISMATCH` / `VALUE_NOT_IN_EVIDENCE` | the model's answer could not be verified against the document, so it was **rejected** rather than stored | the field is null by design. Worth reading the prompt if it recurs |
+| `BURST_UNATTRIBUTED` | a Burst term could not be matched to a line item | stored document-scoped with `appliesTo` set, rather than guessing an item |
+
+And two that are **not** `needs_review` but `failed`:
+
+| | |
+|---|---|
+| `NO_TEXT_LAYER` | an image-only scan. Not supported — see [Limitations](#limitations) |
+| `PDF_CORRUPT` / `PDF_ENCRYPTED` | unreadable or password-protected. Fails once, permanently, rather than retrying |
+
+A document with `status: needs_classification` is neither: the type could not be determined, so
+there was nothing meaningful to extract (field definitions are per type). Fix it with
+`PATCH /documents/{id} {"docType":"order_form"}` and it re-extracts.
+
+### The drift case, end to end
+
+The most common real situation: an existing customer renames a label.
+
+```bash
+# 1. the field comes back null
+curl -s 'localhost:3000/documents?status=needs_review' | jq '.documents[0].reviewReasons'
+
+# 2. see what the run actually produced
+curl -s localhost:3000/documents/7/runs | jq '.[0]'
+
+# 3. add the new wording to that customer's profile, then
+npm run seed                    # inserts v3 and activates it
+
+# 4. repair every affected document, not just this one
+curl -X POST 'localhost:3000/documents/reprocess?customer=cloudshield&status=needs_review'
+
+# 5. the audit shows v2 -> null, v3 -> the value. Nothing was overwritten.
+curl -s localhost:3000/documents/7/runs | jq '.[] | {profileVersion, outcome, isCurrent}'
+```
+
+That is the fix that scales: a profile change repairs the whole backlog, where a `PATCH` repairs
+one document.
 
 ## Terminology — this resolves a real collision
 
