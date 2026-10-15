@@ -14,20 +14,29 @@
     "worker": "tsx watch src/entrypoints/worker.ts",
     "test": "vitest run",
     "accuracy": "tsx accuracy/score.ts",
-    "accuracy:record": "LLM_MODE=record tsx accuracy/score.ts"
+    "accuracy:record": "LLM_MODE=record tsx accuracy/score.ts",
+    "lint:api": "spectral lint openapi.yaml --fail-severity=error"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",
     "express": "^4.21.2",
+    "express-openapi-validator": "^5.6.2",
+    "multer": "^2.4.0",
     "pdfjs-dist": "^4.10.38",
     "pg": "^8.13.1",
+    "swagger-ui-express": "^5.0.1",
     "yaml": "^2.7.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@stoplight/spectral-cli": "^6.17.0",
     "@types/express": "^5.0.0",
+    "@types/multer": "^2.3.0",
     "@types/node": "^22.10.5",
     "@types/pg": "^8.11.10",
+    "@types/supertest": "^7.2.1",
+    "@types/swagger-ui-express": "^4.1.8",
+    "supertest": "^7.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

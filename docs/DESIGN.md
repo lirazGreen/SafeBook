@@ -1558,10 +1558,15 @@ src/
   llm/prompts/
   poller/{loop.ts,scan.ts}  chained setTimeout · stat/size/mtime stability gate
                             · sha256 dedupe → enqueue
-  api/{server.ts,routes/*}  Express + express-openapi-validator + swagger-ui-express
-openapi.yaml                hand-written spec: served at /docs, enforced at runtime
+  api/{server.ts,routes.ts,present.ts}   Express + express-openapi-validator +
+                            swagger-ui-express. present.ts shapes every response to
+                            the spec, because validateResponses is ON
+openapi.yaml                hand-written spec: served at /docs, ENFORCED at runtime in
+                            both directions, linted by spectral, and exercised
+                            operation-by-operation by tests/integration/contract.test.ts
 accuracy/{expected/*.json,compare.ts,runner.ts,score.ts}   <- one comparison, shared by
                             npm run accuracy AND tests/accuracy/kpi.test.ts
+.spectral.yaml              <- lint rules for the spec; npm run lint:api
 tests/{unit,integration,accuracy}/ + tests/fixtures/llm/*.json
 config/{fields,profiles}/
 docker-compose.yml  .env.example  .nvmrc  README.md
@@ -2633,13 +2638,97 @@ variable already in the environment WINS, so `LLM_MODE=record npm run accuracy` 
 overridden, docker-compose's own `environment:` block still beats the mounted file, and the
 offline test guard cannot be undone by a committed `.env`.
 
-### Phase 9 — full API + OpenAPI
+### Phase 9 — the API, spec-first ✅
 
-`openapi.yaml` written **first**, then the 19 endpoints implemented against it with
-`express-openapi-validator` enforcing both directions: multipart upload (1..N files, magic-byte
-+ size guards, per-file results), routing-only `PATCH`, review acknowledgement, reprocess,
-customer/profile management, `POST /scan`, `GET /jobs/:id`, `/trace`, `/file`. Swagger UI at
-`/docs`, spectral lint + contract test in CI.
+`openapi.yaml` written **first**, then 16 operations implemented against it, with
+`express-openapi-validator` enforcing it at runtime in **both directions**. Swagger UI at
+`/docs`, the raw spec at `/openapi.json`, `spectral` in `npm run lint:api`, and
+`tests/integration/contract.test.ts` exercising every operation.
+
+| | |
+|---|---|
+| **ingest** | `POST /documents` (multipart, 1..N), `POST /scan` |
+| **inspect** | `GET /health`, `/documents`, `/documents/{id}`, `/{id}/runs`, `/{id}/trace`, `/{id}/file`, `/jobs/{id}`, `/special-terms`, `/customers`, `/customers/{slug}/profiles` |
+| **correct** | `PATCH /documents/{id}`, `POST /{id}/reprocess`, `POST /{id}/review`, `POST /documents/reprocess` |
+
+#### Response validation is the part that earns its keep
+
+`validateResponses` is ON, with `additionalProperties: false` on every response schema. So a
+handler that returns an undeclared field, omits a required one, or renders a date in the wrong
+format **fails the contract test** rather than shipping. That is the whole difference between a
+spec and a description, and it is what makes "the hand-written spec cannot silently drift from
+behaviour" a fact rather than an aspiration. A response-validation failure surfaces as a **500
+with code `INTERNAL`**, named distinctly so it cannot be mistaken for a client error.
+
+It also forced a real improvement. Raw rows could not satisfy those schemas, and they were
+leaking the storage layer anyway: `document_id: "3"` as a string (the driver returns BIGINT as
+text), snake_case mixed with camelCase inside one object, and internal columns like `raw_text`
+and `file_sha256` that a caller has no business seeing. `src/api/present.ts` now shapes every
+response, and it is the single place where three conversions happen — `DATE` → `mm-dd-yyyy`,
+`INTEGER` → `Net xx`, and BIGINT → number (money deliberately **not**: it stays a decimal
+string).
+
+#### `allowUnknownQueryParameters: false`
+
+`GET /documents?customerSlug=acme` is a **400**, not a silently-ignored filter. A caller who
+mistypes a filter name otherwise believes it applied and reads the unfiltered result as the
+answer — which is worse than an error.
+
+#### The contract enforces the "no writable extracted values" rule
+
+`PATCH /documents/{id}` declares `additionalProperties: false` over exactly `customerId` and
+`docType`, so `{"amount": "1.00"}` is rejected **by the spec** rather than by a hand-written
+check somewhere that could be forgotten or bypassed by a new handler.
+
+```
+$ curl -X PATCH localhost:3000/documents/1 -d '{"amount":"1.00"}'
+{"error":"request/body must NOT have additional properties: /body/amount …","code":"BAD_REQUEST"}
+```
+
+#### Six bugs the spec and its validator found
+
+Writing the spec first and then enforcing it surfaced more than the handlers would have:
+
+| | |
+|---|---|
+| **YAML flow-mapping descriptions split on commas** | `description: Worker id, for debugging` silently became a property named `for debugging`. Spectral caught three. |
+| **Multi-line `required:` lists** were parsed as single comma-containing strings, so 17 lists required a property literally named `"id, filename, ingress, …"`. Caught by a schema walk, not by reading. |
+| **`nullable` without `type`** is rejected outright by ajv — I had used it beside `oneOf`/`allOf` in three places, which 500'd every single endpoint. |
+| **`nullable` beside an `enum` still needs `null` IN the enum.** `nullable` widens the type, not the enumeration. Five places. |
+| **`allOf` does NOT compose with `additionalProperties: false`** — each branch is evaluated independently and knows nothing of the other's properties, so `SpecialTermWithDocument` rejected its own `documentId`. A real trap, and only response validation surfaces it. |
+| **`doc_type` is nullable and the spec said otherwise.** `needs_classification` is a real state, so an unclassified document returned `docType: null` against a non-nullable enum. This is the same fact that justifies ONE `documents` table rather than one per type. |
+
+And two outside the spec:
+
+- **`registerBytes` returned the document id as a STRING.** The driver returns BIGINT as text,
+  and `Number()` was missing — so the id flowed out as `"26"`, compared unequal to `26`
+  everywhere downstream, and silently broke the worker's own
+  `job.documentId === documentId` check.
+- **`?reextract=false` did nothing.** The validator *coerces* a declared boolean query
+  parameter, so the handler received `false` rather than `"false"`; comparing against the string
+  matched nothing and re-extraction ran anyway. Typing the query bag as
+  `Record<string, string | undefined>` is what hid it.
+
+#### Spectral configuration, and what is deliberately off
+
+`.spectral.yaml` requires an `operationId`, a `tag` and a `description` on every operation —
+all three are load-bearing rather than decorative: the tags group the Swagger UI and the
+operationIds name a generated client. `oas3-unused-component` is a warning rather than an error
+because auth is explicitly out of scope for this assignment, and leaving a security rule on
+would mean 16 warnings a reader has to learn to ignore.
+
+#### The contract test asserts its own completeness
+
+It cross-checks the spec's `operationId`s against the test source and fails if one is
+unexercised — because an endpoint nobody calls is an endpoint response validation never runs
+against, which would make the whole mechanism silently partial.
+
+#### Useful side effect: Swagger UI is the UI
+
+Swagger UI renders a real file picker for the multipart upload, so the four sample PDFs can be
+submitted from a browser and the results browsed interactively. That covers most of what the
+deferred read-only HTML page would have provided, for no extra code — which is why the UI stays
+out of scope rather than becoming a phase.
 
 ### Phase 10 — README + polish
 

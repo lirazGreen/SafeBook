@@ -1,0 +1,19 @@
+extends: ["spectral:oas"]
+
+rules:
+  # Every operation is tagged and has an operationId — both are load-bearing
+  # rather than decorative: the tags group the Swagger UI, and the operationIds
+  # are what a generated client is named after.
+  operation-operationId: error
+  operation-tags: error
+  operation-description: error
+
+  # A documented example per response is NOT required: the examples here are
+  # taken from the four real samples where they add something, and an empty
+  # placeholder example would be worse than none.
+  oas3-valid-media-example: error
+
+  # Off deliberately: this is an internal operations API for a take-home
+  # assignment and auth is explicitly out of scope, stated in the README.
+  # Leaving the rule on would mean 16 warnings a reader has to learn to ignore.
+  oas3-unused-component: warn

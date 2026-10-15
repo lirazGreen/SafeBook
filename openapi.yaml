@@ -1,0 +1,1170 @@
+openapi: 3.0.3
+
+info:
+  title: SafeBook Document Data Extraction
+  version: 0.1.0
+  description: |
+    Watches a folder for contract PDFs, identifies each document's type and the
+    customer that issued it **from the content alone**, and extracts a fixed
+    field set using per-customer, per-document-type definitions.
+
+    This file is the **contract, not documentation written afterwards**. It is
+    served at `/docs`, and `express-openapi-validator` enforces it at runtime in
+    BOTH directions — a handler returning an undeclared field fails the contract
+    test, so the hand-written spec cannot silently drift from behaviour.
+
+    ### Two conventions worth knowing before reading the schemas
+
+    **Dates are rendered `mm-dd-yyyy` and payment terms as `Net xx`, at this
+    boundary and nowhere else.** They are stored as `DATE` and `INTEGER`; storing
+    them pre-formatted would break ordering and range queries. One serialiser
+    applies the rule to every date in a response, rather than a list of column
+    names to keep in step.
+
+    **Money is a decimal STRING, never a JSON number.** `22916.67` becomes
+    `22916.669999999998` as an IEEE double, and the point of `NUMERIC` is
+    defeated if anything parses it on the way through.
+
+    ### Mutations enqueue; they do not do the work
+
+    Every mutation returns `202` with a job id. Nothing parses inside an HTTP
+    handler: `pdfjs` parsing is CPU-bound and single-threaded so it blocks the
+    event loop, and a bulk reprocess can touch dozens of documents with LLM
+    calls.
+
+    ### What a human may write
+
+    Only **routing** (`customerId`, `docType`) and a **review acknowledgement**.
+    No extracted value is writable. The first two change the INPUT to extraction,
+    so re-extraction regenerates every field with fresh evidence — even a manual
+    override never yields an unevidenced value. A wrong value means the
+    *definition* is wrong, and the fix is a profile change, which repairs every
+    affected document rather than one.
+
+servers:
+  - url: http://localhost:3000
+    description: local
+
+tags:
+  - name: ingest
+    description: Getting documents in. Folder polling and upload are both normal paths.
+  - name: inspect
+    description: Reading what was extracted, and proving where it came from.
+  - name: correct
+    description: Routing fixes and review acknowledgement. Never extracted values.
+  - name: config
+    description: Customers and profiles. Read-only over HTTP — YAML is the source of truth.
+
+paths:
+  /health:
+    get:
+      tags: [inspect]
+      summary: Liveness, including the database
+      operationId: getHealth
+      description: |
+        Checks Postgres as well as the process, because an api that answers while
+        the database is unreachable is not actually serving.
+      responses:
+        '200':
+          description: The api is up and Postgres answered.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok: { type: boolean, enum: [true] }
+        '503':
+          $ref: '#/components/responses/DatabaseUnavailable'
+
+  /documents:
+    post:
+      tags: [ingest]
+      summary: Upload one or more PDFs
+      operationId: uploadDocuments
+      description: |
+        Repeat `-F file=@…` for several files. One endpoint for one *or* many: a
+        single upload is simply an array of one.
+
+        **Per-file results, because one bad file must not fail the rest.** Before
+        anything is enqueued each file is checked for the `%PDF-` magic bytes
+        (Content-Type is client-supplied and lies) and against `MAX_UPLOAD_BYTES`.
+
+        Uploads are written **straight to the archive**, never into `inbox/` —
+        writing there would make the next poll tick pick them up too and
+        double-enqueue. The client filename is kept only as metadata and never
+        used to build a path (the key is always `archive/<sha256>.pdf`), so
+        `../../etc/passwd` as a filename is inert by construction rather than by
+        sanitising.
+
+        **A duplicate sha256 returns `duplicate` and enqueues nothing** — the
+        same rule a re-dropped folder file follows, so there is one rule rather
+        than two. This holds across ingresses: the same bytes arriving in the
+        folder and by upload is ONE document and ONE extraction.
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [file]
+              properties:
+                file:
+                  oneOf:
+                    - type: string
+                      format: binary
+                    - type: array
+                      items: { type: string, format: binary }
+      responses:
+        '202':
+          description: Every file was accepted and queued (or was a duplicate).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResults' }
+        '207':
+          description: |
+            Multi-Status: some files were rejected and the rest were queued. The
+            body has the same shape either way, so a client needs one code path.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UploadResults' }
+              example:
+                - { file: a.pdf, status: queued, documentId: 4, jobId: 17 }
+                - { file: b.pdf, status: duplicate, documentId: 2, jobId: null }
+                - { file: notes.docx, status: rejected, documentId: null, jobId: null,
+                    error: 'NOT_A_PDF: notes.docx does not begin with %PDF-', code: NOT_A_PDF }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+    get:
+      tags: [inspect]
+      summary: List documents
+      operationId: listDocuments
+      description: |
+        The review queue in practice. `?resolution=unmatched` plus
+        `detectedIssuerName` is how an unregistered customer is found and
+        registered without opening the PDF, and `?reason=` filters by a single
+        `review_reasons` code.
+      parameters:
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/DocumentStatus' } }
+        - { name: docType, in: query, schema: { $ref: '#/components/schemas/DocType' } }
+        - { name: customer, in: query, description: customer slug, schema: { $ref: '#/components/schemas/Slug' } }
+        - { name: resolution, in: query, schema: { $ref: '#/components/schemas/CustomerResolution' } }
+        - name: reason
+          in: query
+          description: A single `review_reasons` code, so the review queue is filterable.
+          schema: { $ref: '#/components/schemas/ReviewReason' }
+        - { name: hasInferred, in: query, description: only documents with a filled-down or inherited item value, schema: { type: boolean } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+        - { name: offset, in: query, schema: { type: integer, minimum: 0, default: 0 } }
+      responses:
+        '200':
+          description: Newest first.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [documents, total, limit, offset]
+                properties:
+                  documents:
+                    type: array
+                    items: { $ref: '#/components/schemas/DocumentSummary' }
+                  total:
+                    type: integer
+                    description: Matching rows, ignoring limit and offset.
+                  limit: { type: integer }
+                  offset: { type: integer }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /documents/reprocess:
+    post:
+      tags: [correct]
+      summary: Re-extract many documents — the fix that scales
+      operationId: reprocessDocuments
+      description: |
+        The real repair path after a profile change. `PATCH /documents/{id}` is
+        the one-off escape hatch; this is what fixes every affected document.
+
+        Fans out into **one job per document**, so each retries independently and
+        progress is observable. At least one filter is required — an unfiltered
+        bulk reprocess would re-bill every LLM call in the corpus.
+      parameters:
+        - { name: customer, in: query, schema: { $ref: '#/components/schemas/Slug' } }
+        - { name: status, in: query, schema: { $ref: '#/components/schemas/DocumentStatus' } }
+        - { name: docType, in: query, schema: { $ref: '#/components/schemas/DocType' } }
+        - { name: resolution, in: query, schema: { $ref: '#/components/schemas/CustomerResolution' } }
+      responses:
+        '202':
+          description: Jobs enqueued.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [matched, enqueued, alreadyQueued, jobIds]
+                properties:
+                  matched: { type: integer }
+                  enqueued: { type: integer }
+                  alreadyQueued:
+                    type: integer
+                    description: Already pending, so not queued twice. The partial unique index decides.
+                  jobIds: { type: array, items: { type: integer } }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+
+  /documents/{id}:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      tags: [inspect]
+      summary: One document, with parties, items and special terms
+      operationId: getDocument
+      description: |
+        Current values plus both parties, every line item and every special term.
+        Use `/trace` to see where each value came from, and `/runs` for the
+        history of attempts.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Document' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    patch:
+      tags: [correct]
+      summary: Correct ROUTING — which profile and field set apply
+      operationId: patchDocument
+      description: |
+        The only writable fields on a document, and neither is an extracted
+        value: `customerId` decides which profile applies and `docType` which
+        field definitions do. Both change the INPUT to extraction, so
+        re-extraction regenerates every field with fresh evidence.
+
+        `?reextract=false` records the routing change without re-running — for a
+        metadata-only edit.
+      parameters:
+        - name: reextract
+          in: query
+          schema: { type: boolean, default: true }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              minProperties: 1
+              properties:
+                customerId: { type: integer, nullable: true, minimum: 1 }
+                docType: { $ref: '#/components/schemas/DocType' }
+      responses:
+        '202':
+          description: Routing updated; re-extraction enqueued unless `reextract=false`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/reprocess:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    post:
+      tags: [correct]
+      summary: Re-extract this document unchanged
+      operationId: reprocessDocument
+      description: |
+        The deliberate retry path. Resets `attempts` and enqueues fresh, which is
+        correct after a profile fix — and it is operator-driven, so re-dropping a
+        failed PDF cannot accumulate retries on its own.
+      responses:
+        '202':
+          description: Enqueued.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JobAccepted' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/review:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    post:
+      tags: [correct]
+      summary: Acknowledge a review
+      operationId: reviewDocument
+      description: |
+        Records a judgement about the RECORD — "I looked, it is correct" — not a
+        claim about the document, and it changes no extracted value. It exists
+        because otherwise `needs_review` fills with already-approved documents and
+        stops being useful.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [by]
+              properties:
+                by: { type: string, minLength: 1, maxLength: 200 }
+                note: { type: string, maxLength: 2000 }
+      responses:
+        '200':
+          description: Acknowledged.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [id, status, reviewedAt, reviewedBy, note]
+                properties:
+                  id: { type: integer }
+                  status: { $ref: '#/components/schemas/DocumentStatus' }
+                  reviewedAt: { type: string, format: date-time }
+                  reviewedBy: { type: string }
+                  note: { type: string, nullable: true }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/runs:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      tags: [inspect]
+      summary: Audit history — every extraction attempt
+      operationId: listRuns
+      description: |
+        Append-only. A re-extraction replaces current values in place and adds a
+        row here, so `v2 -> null, v3 -> 23,640,000.00` is answerable after a
+        profile fix and nothing is overwritten.
+      responses:
+        '200':
+          description: Newest first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ExtractionRun' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/trace:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      tags: [inspect]
+      summary: Every stored value with the exact document text it came from
+      operationId: getTrace
+      description: |
+        Evidence carries character OFFSETS, and this endpoint re-slices
+        `raw_text` at them to report `evidenceVerified`. A quoted string alone
+        could itself be wrong — a model can hallucinate its own citation — so the
+        response PROVES the evidence rather than repeating it.
+
+        Rule-sourced values carry offsets too, so "every stored value points back
+        at document text" has no exception for the deterministic path.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [documentId, runId, fields]
+                properties:
+                  documentId: { type: integer }
+                  runId: { type: integer }
+                  fields:
+                    type: array
+                    items: { $ref: '#/components/schemas/TracedField' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /documents/{id}/file:
+    parameters: [{ $ref: '#/components/parameters/DocumentId' }]
+    get:
+      tags: [inspect]
+      summary: The original PDF
+      operationId: getDocumentFile
+      description: |
+        Served from the archive via `StorageAdapter`, so the extraction can
+        always be checked against the document it came from. Keys are
+        content-addressed (`<sha256>.pdf`), which is also what makes archiving
+        idempotent on a retry.
+      responses:
+        '200':
+          description: The archived bytes, byte-identical to what arrived.
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /scan:
+    post:
+      tags: [ingest]
+      summary: Sweep the inbox now instead of waiting for the timer
+      operationId: scanInbox
+      description: |
+        Enqueues a `scan_inbox` job rather than scanning inline: the worker owns
+        the inbox and the write-stability state, and the api must not duplicate
+        that logic or need a filesystem mount.
+
+        A partial unique index caps pending document-less jobs at one per kind,
+        so repeat calls **coalesce** instead of queueing redundant sweeps — and a
+        coalesced call waits on the sweep that is already pending, rather than
+        returning a bare "already queued" with no handle.
+
+        `?wait=<ms>` long-polls until the job settles and returns the summary
+        directly, which is what makes a demo immediate and an integration test
+        deterministic without sleeping on a timer.
+      parameters:
+        - name: wait
+          in: query
+          schema: { type: integer, minimum: 0, maximum: 120000, default: 0 }
+      responses:
+        '200':
+          description: The sweep finished within `wait`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScanResult' }
+              example:
+                status: done
+                jobId: 42
+                coalesced: false
+                found: 4
+                enqueued: 4
+                duplicate: 0
+                unstable: 0
+                rejected: 0
+        '202':
+          description: Queued, or still running when `wait` expired.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ScanResult' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '503': { $ref: '#/components/responses/DatabaseUnavailable' }
+
+  /jobs/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      tags: [inspect]
+      summary: One job's status, attempts and failure
+      operationId: getJob
+      description: |
+        `errorClass` says whether the failure could possibly be helped by
+        retrying: a `permanent` one is terminal immediately rather than burning
+        three attempts on an identical result — and, where LLM calls are
+        involved, three identical bills.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Job' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /special-terms:
+    get:
+      tags: [inspect]
+      summary: Query special terms across documents
+      operationId: listSpecialTerms
+      description: |
+        `term_text` is the source of truth and the parsed columns are a
+        projection of it, written once at extraction rather than derived per
+        request — CloudShield's Burst paragraph contains 38.89%, 28.21% *and*
+        19.05%, so choosing the right one needs item context only the extraction
+        stage has. Parsing per request would also let two reads of one row
+        disagree.
+      parameters:
+        - { name: type, in: query, schema: { type: string, maxLength: 64 } }
+        - { name: minPercent, in: query, schema: { type: number, minimum: 0, maximum: 100 } }
+        - name: scope
+          in: query
+          description: |
+            `item` means attached to a line item, `document` means not. There is
+            no `scope` COLUMN — `item_id IS NULL` already says it, and a second
+            column would be pure duplication of that test.
+          schema: { type: string, enum: [item, document] }
+        - { name: customer, in: query, schema: { $ref: '#/components/schemas/Slug' } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/SpecialTermWithDocument' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+
+  /customers:
+    get:
+      tags: [config]
+      summary: Registered customers
+      operationId: listCustomers
+      description: |
+        Read-only over HTTP. `config/customers.yaml` is the single source of
+        truth and `npm run seed` is the only writer — remove the second writer and
+        the drift-reconciliation machinery it needed disappears with it.
+      responses:
+        '200':
+          description: ok
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Customer' }
+
+  /customers/{slug}/profiles:
+    parameters:
+      - { name: slug, in: path, required: true, schema: { $ref: '#/components/schemas/Slug' } }
+    get:
+      tags: [config]
+      summary: Profile version history for a customer
+      operationId: listCustomerProfiles
+      description: |
+        Append-only and versioned, because `extraction_runs.profile_id` needs an
+        immutable record of the rules that produced each value. `definition` holds
+        the MERGED result — `extends: _base` is resolved once at seed time, so a
+        row is self-contained and the audit never needs a re-merge that might
+        behave differently later.
+      responses:
+        '200':
+          description: Newest version first.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ProfileVersion' }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+components:
+  parameters:
+    DocumentId:
+      name: id
+      in: path
+      required: true
+      schema: { type: integer, minimum: 1 }
+
+  responses:
+    BadRequest:
+      description: The request did not satisfy this spec.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: No such resource.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    DatabaseUnavailable:
+      description: Postgres did not answer.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      additionalProperties: false
+      required: [error, code]
+      description: |
+        `code` is drawn from the SAME vocabulary as `jobs.error_code`, so an HTTP
+        failure and a job failure speak one language.
+      properties:
+        error: { type: string }
+        code: { type: string }
+
+    Slug:
+      type: string
+      pattern: '^[a-z0-9][a-z0-9-]*$'
+      maxLength: 64
+
+    DocType:
+      type: string
+      enum: [order_form, purchase_order]
+
+    DocumentStatus:
+      type: string
+      enum: [received, parsed, needs_classification, extracted, needs_review, failed]
+
+    CustomerResolution:
+      type: string
+      enum: [matched, ambiguous, unmatched, manual]
+
+    # A $ref cannot carry `nullable` in OpenAPI 3.0, so the nullable forms are
+    # separate schemas rather than an annotation at the use site.
+    DocTypeOrNull:
+      type: string
+      nullable: true
+      description: |
+        null until the document is classified — `needs_classification` is a real
+        state, which is also why there is ONE documents table rather than one per
+        type: a split would leave an unclassified document with no home.
+      enum: [order_form, purchase_order, null]
+
+    CustomerResolutionOrNull:
+      type: string
+      nullable: true
+      description: null until extraction has run.
+      enum: [matched, ambiguous, unmatched, manual, null]
+
+    ReviewReason:
+      type: string
+      description: A fixed vocabulary, so the review queue is filterable.
+      enum:
+        - TOTAL_MISMATCH
+        - ITEM_ARITHMETIC
+        - MISSING_REQUIRED_FIELD
+        - NO_ITEMS_FOUND
+        - UNMAPPED_COLUMNS
+        - DATE_OUT_OF_RANGE
+        - DATE_RANGE_REVERSED
+        - DATE_ENVELOPE_MISMATCH
+        - NEGATIVE_AMOUNT
+        - NEGATIVE_QUANTITY
+        - MIXED_CURRENCY
+        - AMBIGUOUS_CURRENCY
+        - INFERRED_VALUES
+        - UNMATCHED_CUSTOMER
+        - AMBIGUOUS_CUSTOMER
+        - BURST_UNATTRIBUTED
+        - LLM_EVIDENCE_MISMATCH
+        - VALUE_NOT_IN_EVIDENCE
+        - FIELD_NOT_FOUND
+        - PDF_CORRUPT
+        - PDF_ENCRYPTED
+        - NO_TEXT_LAYER
+        - LLM_FIXTURE_MISSING
+        - LLM_UNAVAILABLE
+        - DB_CONSTRAINT
+        - UNKNOWN
+
+    Decimal:
+      type: string
+      nullable: true
+      description: |
+        A decimal STRING, never a JSON number. `22916.67` becomes
+        `22916.669999999998` as an IEEE double.
+      pattern: '^-?\d+(\.\d+)?$'
+
+    MmDdYyyy:
+      type: string
+      nullable: true
+      pattern: '^\d{2}-\d{2}-\d{4}$'
+      description: The brief's output format, applied at this boundary only.
+
+    Currency:
+      type: string
+      nullable: true
+      pattern: '^[A-Z]{3}$'
+      description: ISO 4217. Never a symbol — `$` is ambiguous across seven currencies.
+
+    JsonObject:
+      type: object
+      additionalProperties: true
+
+    DocumentSummary:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - filename
+        - ingress
+        - docType
+        - status
+        - amount
+        - currency
+        - startDate
+        - endDate
+        - customer
+        - customerResolution
+        - detectedIssuerName
+        - reviewReasons
+        - itemCount
+        - createdAt
+      properties:
+        id: { type: integer }
+        filename:
+          type: string
+          description: Stored as metadata and NEVER used for logic — not for the customer, not for the type.
+        ingress: { type: string, enum: [poll, upload, null], nullable: true }
+        docType: { $ref: '#/components/schemas/DocTypeOrNull' }
+        status: { $ref: '#/components/schemas/DocumentStatus' }
+        amount: { $ref: '#/components/schemas/Decimal' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        startDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        endDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        customer: { $ref: '#/components/schemas/CustomerRef' }
+        customerResolution: { $ref: '#/components/schemas/CustomerResolutionOrNull' }
+        detectedIssuerName:
+          type: string
+          nullable: true
+          description: |
+            Populated even when no customer matched, so a human can register them
+            from the record without opening the PDF.
+        reviewReasons:
+          type: array
+          items: { $ref: '#/components/schemas/ReviewReason' }
+        itemCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    CustomerRef:
+      type: object
+      nullable: true
+      additionalProperties: false
+      required: [id, slug, name]
+      properties:
+        id: { type: integer }
+        slug: { $ref: '#/components/schemas/Slug' }
+        name: { type: string }
+
+    Document:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - filename
+        - ingress
+        - pageCount
+        - docType
+        - docTypeConfidence
+        - docTypeSource
+        - customer
+        - customerResolution
+        - detectedIssuerName
+        - status
+        - reviewReasons
+        - startDate
+        - endDate
+        - amount
+        - currency
+        - paymentTerms
+        - billingFrequency
+        - attributes
+        - typeDetails
+        - parties
+        - items
+        - specialTerms
+        - review
+        - currentRunId
+        - createdAt
+        - updatedAt
+      properties:
+        id: { type: integer }
+        filename: { type: string }
+        ingress: { type: string, enum: [poll, upload, null], nullable: true }
+        pageCount: { type: integer, nullable: true }
+        docType: { $ref: '#/components/schemas/DocTypeOrNull' }
+        docTypeConfidence: { type: number, nullable: true }
+        docTypeSource: { type: string, enum: [classified, manual, null], nullable: true }
+        customer: { $ref: '#/components/schemas/CustomerRef' }
+        customerResolution: { $ref: '#/components/schemas/CustomerResolutionOrNull' }
+        detectedIssuerName: { type: string, nullable: true }
+        status: { $ref: '#/components/schemas/DocumentStatus' }
+        reviewReasons:
+          type: array
+          items: { $ref: '#/components/schemas/ReviewReason' }
+        startDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        endDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        amount: { $ref: '#/components/schemas/Decimal' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        paymentTerms:
+          type: string
+          nullable: true
+          pattern: '^Net \d+$'
+          description: Stored as an integer; `Net xx` is an output format applied here.
+        billingFrequency: { type: string, nullable: true }
+        attributes:
+          allOf: [{ $ref: '#/components/schemas/JsonObject' }]
+          description: Profile-declared optional fields. Adding one is a YAML change, not a migration.
+        typeDetails:
+          # `type: object` is required alongside `nullable` in OpenAPI 3.0 —
+          # ajv refuses `nullable` next to a bare oneOf. null when the document
+          # has no detail row yet (it is unclassified, or extraction has not run).
+          type: object
+          nullable: true
+          oneOf:
+            - { $ref: '#/components/schemas/OrderFormDetails' }
+            - { $ref: '#/components/schemas/PurchaseOrderDetails' }
+        parties:
+          type: array
+          items: { $ref: '#/components/schemas/Party' }
+        items:
+          type: array
+          items: { $ref: '#/components/schemas/Item' }
+        specialTerms:
+          type: array
+          items: { $ref: '#/components/schemas/SpecialTerm' }
+        review: { $ref: '#/components/schemas/Review' }
+        currentRunId: { type: integer, nullable: true }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    Review:
+      type: object
+      nullable: true
+      additionalProperties: false
+      required: [reviewedAt, reviewedBy, note]
+      properties:
+        reviewedAt: { type: string, format: date-time }
+        reviewedBy: { type: string }
+        note: { type: string, nullable: true }
+
+    OrderFormDetails:
+      type: object
+      additionalProperties: false
+      required:
+        - quoteNumber
+        - quoteDate
+        - quoteExpirationDate
+        - proposedBy
+        - subscriptionTermMonths
+        - masterAgreementRef
+        - poRequired
+        - poNumber
+        - poAmount
+      properties:
+        quoteNumber: { type: string, nullable: true }
+        quoteDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        quoteExpirationDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        proposedBy: { type: string, nullable: true }
+        subscriptionTermMonths: { $ref: '#/components/schemas/Decimal' }
+        masterAgreementRef: { type: string, nullable: true }
+        poRequired: { type: boolean, nullable: true }
+        poNumber: { type: string, nullable: true }
+        poAmount: { $ref: '#/components/schemas/Decimal' }
+
+    PurchaseOrderDetails:
+      type: object
+      additionalProperties: false
+      required: [poNumber, poDate]
+      properties:
+        poNumber: { type: string, nullable: true }
+        poDate: { $ref: '#/components/schemas/MmDdYyyy' }
+
+    Party:
+      type: object
+      additionalProperties: false
+      description: |
+        Both parties, both document types. Which role is SafeBook's customer
+        INVERTS by type: the vendor issues an order form, the buyer issues a PO.
+        The brief's "billing address" is always the buyer's, and "customer
+        signature" always the buyer's signature.
+      required:
+        - role
+        - name
+        - address
+        - shippingAddress
+        - contactName
+        - contactEmail
+        - contactPhone
+        - signaturePresent
+        - signerName
+        - signerTitle
+        - signatureDate
+      properties:
+        role: { type: string, enum: [buyer, vendor] }
+        name: { type: string, nullable: true }
+        address: { type: string, nullable: true }
+        shippingAddress: { type: string, nullable: true }
+        contactName: { type: string, nullable: true }
+        contactEmail: { type: string, nullable: true }
+        contactPhone: { type: string, nullable: true }
+        signaturePresent:
+          type: boolean
+          nullable: true
+          description: |
+            `null` is "could not tell", which is a different answer from `false`
+            and escalates rather than asserting the contract is unsigned. A PO's
+            vendor never signs, so null is the CORRECT answer there.
+        signerName: { type: string, nullable: true }
+        signerTitle: { type: string, nullable: true }
+        signatureDate: { $ref: '#/components/schemas/MmDdYyyy' }
+
+    Item:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - lineNo
+        - productName
+        - quantity
+        - unitPrice
+        - totalAmount
+        - currency
+        - itemStartDate
+        - itemEndDate
+        - attributes
+        - fieldSources
+        - hasInferred
+      properties:
+        id: { type: integer }
+        lineNo: { type: integer }
+        productName:
+          type: string
+          nullable: true
+          description: |
+            Nullable on purpose. If the table parse cannot recover it, the row's
+            money still reconciles and is worth keeping; NOT NULL would force
+            dropping the row and break the `sum(items) == amount` check. It is
+            also never filled down — a plausible duplicate would MASK a parsing
+            bug rather than surface it.
+        quantity: { $ref: '#/components/schemas/Decimal' }
+        unitPrice: { $ref: '#/components/schemas/Decimal' }
+        totalAmount: { $ref: '#/components/schemas/Decimal' }
+        currency: { $ref: '#/components/schemas/Currency' }
+        itemStartDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        itemEndDate: { $ref: '#/components/schemas/MmDdYyyy' }
+        attributes: { $ref: '#/components/schemas/JsonObject' }
+        fieldSources:
+          allOf: [{ $ref: '#/components/schemas/JsonObject' }]
+          description: |
+            Provenance for values NOT read directly off the page — `inherited`
+            (a sparse column, deterministic), `filled_down`, `from_document`.
+            Absent or empty means every value came straight from the document.
+        hasInferred: { type: boolean }
+
+    SpecialTerm:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - itemId
+        - termType
+        - ordinal
+        - percent
+        - capValue
+        - capUnit
+        - period
+        - appliesTo
+        - termText
+        - attributes
+        - pageNo
+      properties:
+        id: { type: integer }
+        itemId:
+          type: integer
+          nullable: true
+          description: null means document-scoped. There is no `scope` column — this test is it.
+        termType: { type: string }
+        ordinal: { type: integer, nullable: true }
+        percent: { $ref: '#/components/schemas/Decimal' }
+        capValue: { $ref: '#/components/schemas/Decimal' }
+        capUnit: { type: string, nullable: true }
+        period: { type: string, nullable: true }
+        appliesTo: { type: string, nullable: true }
+        termText:
+          type: string
+          description: As received. The source of truth; the parsed columns above are a projection of it.
+        attributes: { $ref: '#/components/schemas/JsonObject' }
+        pageNo: { type: integer, nullable: true }
+
+    # Standalone rather than `allOf: [SpecialTerm, {documentId, customer}]`.
+    # `allOf` does NOT compose with `additionalProperties: false`: each branch is
+    # evaluated independently and knows nothing of the other's properties, so the
+    # base branch rejected `documentId` as an additional property. A real trap,
+    # and one that only response validation surfaces.
+    SpecialTermWithDocument:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - itemId
+        - termType
+        - ordinal
+        - percent
+        - capValue
+        - capUnit
+        - period
+        - appliesTo
+        - termText
+        - attributes
+        - pageNo
+        - documentId
+        - customer
+      properties:
+        id: { type: integer }
+        itemId: { type: integer, nullable: true }
+        termType: { type: string }
+        ordinal: { type: integer, nullable: true }
+        percent: { $ref: '#/components/schemas/Decimal' }
+        capValue: { $ref: '#/components/schemas/Decimal' }
+        capUnit: { type: string, nullable: true }
+        period: { type: string, nullable: true }
+        appliesTo: { type: string, nullable: true }
+        termText: { type: string }
+        attributes: { $ref: '#/components/schemas/JsonObject' }
+        pageNo: { type: integer, nullable: true }
+        documentId: { type: integer }
+        customer: { $ref: '#/components/schemas/CustomerRef' }
+
+    TracedField:
+      type: object
+      additionalProperties: false
+      required: [field, value, source, evidence, evidenceVerified]
+      properties:
+        field: { type: string }
+        value:
+          # Deliberately untyped: a traced value is genuinely a string, a number,
+          # a boolean or null depending on the field, and a 3.0 oneOf cannot
+          # carry `nullable` across its branches without null matching several of
+          # them and failing `oneOf`'s exactly-one rule.
+          description: string, number, boolean or null, depending on the field.
+        source:
+          type: string
+          nullable: true
+          enum: [rule, llm, inherited, filled_down, from_document, from_items, null]
+        evidence:
+          type: object
+          nullable: true
+          additionalProperties: false
+          required: [start, end, text]
+          properties:
+            start: { type: integer }
+            end: { type: integer }
+            text:
+              type: string
+              description: The document's own characters at those offsets.
+        evidenceVerified:
+          type: boolean
+          nullable: true
+          description: |
+            `raw_text.slice(start, end) === text`, recomputed on read. null when
+            the field carries no evidence.
+
+    ExtractionRun:
+      type: object
+      additionalProperties: false
+      required: [id, trigger, profileId, profileVersion, engine, llmCalls, outcome, error, startedAt, finishedAt, isCurrent]
+      properties:
+        id: { type: integer }
+        trigger: { type: string }
+        profileId: { type: integer, nullable: true }
+        profileVersion: { type: integer, nullable: true }
+        engine: { $ref: '#/components/schemas/JsonObject' }
+        llmCalls:
+          type: integer
+          description: API calls ACTUALLY made — zero on a fixture replay.
+        outcome: { type: string, enum: [ok, partial, failed] }
+        error: { type: string, nullable: true }
+        startedAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+        isCurrent: { type: boolean }
+
+    Job:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - kind
+        - documentId
+        - status
+        - attempts
+        - errorClass
+        - errorCode
+        - error
+        - result
+        - runAfter
+        - lockedAt
+        - lockedBy
+        - createdAt
+        - finishedAt
+      properties:
+        id: { type: integer }
+        kind: { type: string, enum: [scan_inbox, ingest, reextract, reresolve_customer] }
+        documentId: { type: integer, nullable: true }
+        status: { type: string, enum: [queued, running, done, failed] }
+        attempts:
+          type: integer
+          description: Incremented AT CLAIM TIME, so a worker killed mid-job has already paid for it.
+        errorClass: { type: string, enum: [transient, permanent, null], nullable: true }
+        errorCode: { type: string, nullable: true }
+        error: { type: string, nullable: true }
+        result:
+          type: object
+          nullable: true
+          additionalProperties: true
+          description: A scan summary, or the run id and status for an extraction.
+        runAfter: { type: string, format: date-time }
+        lockedAt: { type: string, format: date-time, nullable: true }
+        lockedBy:
+          type: string
+          nullable: true
+          description: Worker id. Recorded purely so a stuck job is traceable.
+        createdAt: { type: string, format: date-time }
+        finishedAt: { type: string, format: date-time, nullable: true }
+
+    JobAccepted:
+      type: object
+      additionalProperties: false
+      required: [documentId, jobId, enqueued]
+      properties:
+        documentId: { type: integer }
+        jobId: { type: integer, nullable: true }
+        enqueued:
+          type: boolean
+          description: false when the same work was already pending — the partial unique index decides.
+
+    ScanResult:
+      type: object
+      additionalProperties: false
+      required: [status, jobId, coalesced]
+      properties:
+        status: { type: string, enum: [queued, running, done, failed, already_completed] }
+        jobId: { type: integer, nullable: true }
+        coalesced:
+          type: boolean
+          description: True when a sweep was already pending and this call joined it.
+        found: { type: integer }
+        enqueued: { type: integer }
+        duplicate: { type: integer }
+        unstable:
+          type: integer
+          description: |
+            Still being written, or still syncing on a cloud drive. Skipped and
+            retried next tick — this is what a watcher's `awaitWriteFinish` gave us.
+        rejected: { type: integer }
+        error: { type: string }
+        code: { type: string }
+
+    UploadResult:
+      type: object
+      additionalProperties: false
+      required: [file, status, documentId, jobId]
+      properties:
+        file: { type: string }
+        status: { type: string, enum: [queued, duplicate, rejected] }
+        documentId: { type: integer, nullable: true }
+        jobId: { type: integer, nullable: true }
+        error: { type: string }
+        code: { type: string }
+
+    UploadResults:
+      type: array
+      items: { $ref: '#/components/schemas/UploadResult' }
+
+    Customer:
+      type: object
+      additionalProperties: false
+      required: [id, slug, name, documentCount, createdAt]
+      properties:
+        id: { type: integer }
+        slug: { $ref: '#/components/schemas/Slug' }
+        name: { type: string }
+        documentCount: { type: integer }
+        createdAt: { type: string, format: date-time }
+
+    ProfileVersion:
+      type: object
+      additionalProperties: false
+      required: [id, docType, version, isActive, contentHash, createdAt, definition]
+      properties:
+        id: { type: integer }
+        docType: { $ref: '#/components/schemas/DocType' }
+        version: { type: integer }
+        isActive: { type: boolean }
+        contentHash: { type: string }
+        createdAt: { type: string, format: date-time }
+        definition:
+          allOf: [{ $ref: '#/components/schemas/JsonObject' }]
+          description: The MERGED definition — `extends` already resolved, so the row is self-contained.

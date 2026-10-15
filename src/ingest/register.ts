@@ -84,7 +84,7 @@ async function insertAndEnqueue(
   // `ingress` is deliberately NOT overwritten on a cross-ingress duplicate: the
   // FIRST arrival is the one that was actually processed, which is what makes the
   // column answer "why did this document appear?".
-  const { rows } = await client.query<{ id: number }>(
+  const { rows } = await client.query<{ id: string }>(
     `INSERT INTO documents (file_sha256, original_filename, ingress, storage_key)
      VALUES ($1, $2, $3, $4)
      ON CONFLICT (file_sha256) DO NOTHING
@@ -92,17 +92,22 @@ async function insertAndEnqueue(
     [args.hash, basename(args.filename), args.ingress, args.storageKey],
   );
 
+  // Number(), because the driver returns BIGINT as a STRING. Without it the id
+  // flowed out as "26" and compared unequal to 26 everywhere downstream — which
+  // silently broke the claim loop's `job.documentId === documentId` check and
+  // failed response validation against `type: integer`.
   const inserted = rows[0];
   if (inserted !== undefined) {
-    const { jobId } = await enqueue('ingest', inserted.id, null, client);
-    return { documentId: inserted.id, duplicate: false, jobId };
+    const documentId = Number(inserted.id);
+    const { jobId } = await enqueue('ingest', documentId, null, client);
+    return { documentId, duplicate: false, jobId };
   }
 
-  const { rows: existing } = await client.query<{ id: number }>(
+  const { rows: existing } = await client.query<{ id: string }>(
     'SELECT id FROM documents WHERE file_sha256 = $1',
     [args.hash],
   );
-  return { documentId: (existing[0] as { id: number }).id, duplicate: true, jobId: null };
+  return { documentId: Number((existing[0] as { id: string }).id), duplicate: true, jobId: null };
 }
 
 /** Whether these bytes are already known, so a scan can skip them cheaply. */

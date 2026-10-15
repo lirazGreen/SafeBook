@@ -26,6 +26,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./config:/app/config
+      - ./openapi.yaml:/app/openapi.yaml
       - ./archive:/app/archive
 
   worker:
@@ -39,6 +40,7 @@ services:
     volumes:
       - ./src:/app/src
       - ./config:/app/config
+      - ./openapi.yaml:/app/openapi.yaml
       - ./inbox:/app/inbox
       - ./archive:/app/archive
       - ./failed:/app/failed
