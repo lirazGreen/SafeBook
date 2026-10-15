@@ -37,7 +37,46 @@ contains only the brief and `sample docs/`. No git repo yet.
 | Dates | Stored `DATE`; `input_format` declared per field in the profile; `mm-dd-yyyy` only at the API boundary |
 | Payment terms | Stored as `payment_terms_days INT`; the brief's `Net xx` is rendered at the API, same rule as dates |
 | Layout | **Not stored.** Reprocess re-parses the archived PDF, so parser improvements apply retroactively. Only `raw_text` is frozen, because evidence offsets index into it |
-| Currency | `NUMERIC` + `currency CHAR(3)` ISO code; symbol→code map is a constant in code |
+| Currency | `NUMERIC` + `currency CHAR(3)` ISO code; symbol→code map is a constant in code. A bare `# SafeBook — Document Data Extraction Service
+
+## Context
+
+Home assignment (`Assignement - Document Data Extraction.pdf`). SafeBook's customers drop
+contract PDFs into a dedicated folder. The service must process any document landing there,
+identify its type, and extract a fixed field set using **customised definitions per customer
+and document type**, producing tabular structured data.
+
+The brief's KPIs: **≥95%** field accuracy, **≥2** document types, **≥2** customer-specific
+variations per document type. The four sample PDFs map onto that exactly — two Order Forms
+(Acme, CloudShield) and two Purchase Orders (BrightOps, NovaFleet).
+
+Why this needs real design rather than a parsing script: the two Order Forms state payment
+terms only in prose ("within thirty (30) days from invoice"), name their Burst allowance in
+paragraphs rather than fields, and in Acme's case never use the phrase "Technical Account
+Manager" at all. The two POs state the same facts as labelled key/value pairs. A regex
+template cannot reach 95% on the prose; an LLM alone is unreliable on the money columns.
+Hence a hybrid, with definitions held as data so a fifth customer is a config change.
+
+**Status: greenfield.** `/Users/lirazfriedman/workspace/safeBook/safebookshomeassignment/`
+contains only the brief and `sample docs/`. No git repo yet.
+
+## Decisions (settled with the user)
+
+| Area | Decision |
+|---|---|
+| Extraction | Hybrid — deterministic rules for structure, Claude for natural language |
+| Database | PostgreSQL 16 in Docker |
+| DB access | `pg` driver + hand-written SQL migrations, thin repository layer |
+| Language/scope | TypeScript; two entrypoints (`api` + `worker`) over one `src/` |
+| Job queue | Postgres `jobs` table, `FOR UPDATE SKIP LOCKED`. No Redis |
+| Mixed ingress | Folder poll and `POST /documents` are both normal paths. `documents.ingress` ('poll'/'upload') records which; dedupe is by `file_sha256` so the same bytes arriving both ways is one document, no second job |
+| Triggers | **In-process polling timer** in the worker + `POST /documents`. No `chokidar` — the assigner confirmed no file alerts exist, and polling also survives the folder being a cloud drive |
+| Optional fields | Profile-declared, stored in `attributes` JSONB on documents **and** items |
+| Original PDF | Local `archive/<sha256>.pdf` behind a `StorageAdapter`; S3 noted as the production choice |
+| Dates | Stored `DATE`; `input_format` declared per field in the profile; `mm-dd-yyyy` only at the API boundary |
+| Payment terms | Stored as `payment_terms_days INT`; the brief's `Net xx` is rendered at the API, same rule as dates |
+| Layout | **Not stored.** Reprocess re-parses the archived PDF, so parser improvements apply retroactively. Only `raw_text` is frozen, because evidence offsets index into it |
+ resolves from the document's single ISO code, else the profile's `default_currency` — **never** from an address |
 | Raw forms | Not duplicated into columns — kept as evidence in `extraction_runs.field_confidence` |
 | Missing item values | Group-row `inherited` → previous-row `filled_down` → `from_document` → NULL; recorded in `document_items.field_sources`, money and `product_name` never filled down |
 | Classification | From **parsed content only** — never the filename or folder |
@@ -148,9 +187,14 @@ Classification signals, weighted and **position-aware** (the page-1 title region
 Information` with `PO Number:` and `PO Amount: USD 0.00`. A substring match on "purchase
 order" misclassifies it, and a naive `amount` lookup picks up `USD 0.00`. Two defences:
 position weighting (its actual title is `ORDER FORM`) decides classification, and the
-profile's `ignore_sections` will exclude that block during **extraction** — ⚠️ *declared but
-not yet applied; phase 7. Evidence it is still needed: CloudShield currently extracts
-`po_amount: "USD 0.00"` from that block.*
+profile's `ignore_sections` masks that block during **extraction** — ✅ *applied in phase 6.*
+
+The extraction half had a wrinkle worth recording: `po_number` and `po_amount` are real
+`order_form_details` columns that exist **for** that block, so a blanket mask would have deleted
+the data it was added to protect. It needed a complement, `in_section`, which reads a field only
+from inside a named block. Note also that the exposure was never CloudShield itself — its own
+`amount` label is `Total Subscription Fee` — but the **base profile**, whose synonyms include a
+generic `Total Amount`, and therefore an unregistered order form with a similar block.
 
 When `|score_order − score_po| < 3` or both scores `< 4`, Claude arbitrates on page-1 text.
 If still unresolved → `status='needs_classification'`, no extraction attempted (field
@@ -658,52 +702,89 @@ config/profiles/order_form/{_base,acme,cloudshield}.yaml     <- extraction delta
 config/profiles/purchase_order/{_base,brightops,novafleet}.yaml
 ```
 
+These snippets are excerpts of the **real files**, not illustrations. An earlier draft of this
+section carried invented YAML that would now fail schema validation outright — `strategy: llm`,
+`header_rows`, `wrapped_cells`, `placeholder_lines` — which is its own small lesson about
+documenting a config format before writing one.
+
 ```yaml
-# config/profiles/order_form/_base.yaml
+# config/profiles/order_form/_base.yaml — excerpt
 doc_type: order_form
 fields:
   start_date:
     labels: ["Start Date", "Subscription Start Date", "Contract Start Date"]
     input_formats: [long_month, slash_mdy, dash_mdy]
   amount:
-    labels: ["Total fee", "Total Subscription Fee", "Total Price"]
+    labels: ["Total fee", "Total Subscription Fee", "Total Price", "Total Amount"]
   payment_terms:
-    strategy: llm                 # prose by default on order forms
-    sections: ["Payment Terms", "Terms and Conditions"]
+    labels: ["Payment Terms"]
+    sections: ["Payment Terms", "Terms and Conditions"]   # sent ONLY if it escalates
+type_fields:
+  # `type: number` is not decoration: the label is followed by a parenthetical
+  # before the value, so the raw tail of the line is not a number.
+  subscription_term_months: { labels: ["Subscription Term (months)"], type: number }
+  # scoped back INTO the block `ignore_sections` masks, or these would be
+  # permanently null
+  po_required: { labels: ["Is a Purchase Order (PO) required"],
+                 in_section: "Purchase Order Information", type: boolean }
+  po_amount:   { labels: ["PO Amount"], in_section: "Purchase Order Information" }
 items:
   column_synonyms:
-    product_name: ["Name", "Product Name", "Subscriptions"]
+    product_name: ["Name", "Product Name", "Subscriptions", "Description"]
     unit_price:   ["Rate", "Unit Price", "Monthly / Unit Price"]
-    total_amount: ["Total amount", "Total Price"]
+    total_amount: ["Total amount", "Total Amount", "Total Price"]
+  reconcile: quantity * unit_price
+  tolerance: 0.01
 ```
 
 ```yaml
-# config/profiles/order_form/acme.yaml  — deltas only
+# config/profiles/order_form/acme.yaml — the whole file
 extends: _base
+# No ISO code appears anywhere in Acme's document, so rule 1 finds nothing and
+# this answers. Declared rather than inferred: the tempting inference is the
+# billing address, and NovaFleet is the counterexample in the same sample set.
+default_currency: USD
 fields:
-  amount:     { labels: ["Total fee"], money_format: symbol_prefix, currency: USD }
-  start_date: { labels: ["Start Date"], input_format: long_month }
-  buyer_signature_present:
-    strategy: two_column_signature
-    buyer_column: right            # left column is Acme, the vendor
+  amount:     { labels: ["Total fee"], money_format: symbol_prefix }   # "$152,500"
+  start_date: { labels: ["Start Date"], input_format: long_month }     # "January 1, 2025"
+  end_date:   { labels: ["End Date"],   input_format: long_month }
 items:
-  header: ["Name","Start Date","End Date","Rate","Quantity","Total amount"]
-  date_format: short_month_compact  # "Jan 1,2025"
+  date_format: short_month_compact     # "Jan 1,2025" — abbreviated, no space after the comma
 special_terms:
-  tam: { synonyms: ["Customer Support Manager", "Product Architect"] }
+  # Acme never writes the phrase. A wording HINT passed to Claude, not a locator:
+  # its terms are numbered prose with no labels, so this section escalates.
+  synonyms:
+    technical_account_manager: ["Customer Support Manager", "Product Architect"]
 ```
 
 ```yaml
-# config/profiles/order_form/cloudshield.yaml
+# config/profiles/order_form/cloudshield.yaml — excerpt
 extends: _base
 fields:
-  amount: { labels: ["Total Subscription Fee"], money_format: code_prefix }
-  buyer_signature_present: { strategy: placeholder_lines }   # "Name: ____" ⇒ false
-ignore_sections: ["Purchase Order Information"]              # blocks "PO Amount: USD 0.00"
+  amount:     { labels: ["Total Subscription Fee"], money_format: code_prefix }
+  start_date: { labels: ["Subscription Start Date"], input_format: slash_mdy }
+parties:
+  buyer:
+    # "Customer Billing Name:" appears TWICE — the organisation, then the person
+    contact_name: { labels: ["Customer Billing Name"], occurrence: 2 }
+  vendor:
+    # order forms never label the vendor's address; CloudShield states it once,
+    # in the legal preamble. Labels are tried first, so this only answers because
+    # the base profile's "Vendor Address" finds nothing.
+    address: { pattern: 'principal place of business at ([^,]+,\s*[^,]+,\s*[A-Z]{2}\s*\d{5})' }
+ignore_sections: ["Purchase Order Information"]   # masks "PO Amount: USD 0.00"
 items:
-  header_rows: 2                   # wrapped headers
-  carry_down: [subscription_year]  # sparse column: blank rows inherit from above
-  wrapped_cells: true
+  carry_down: [subscription_year]      # sparse column: blank rows inherit from above
+  date_format: slash_mdy               # "3/1/2025" — declared, so not flagged ambiguous
+  reconcile: quantity * unit_price * order_term_months   # priced monthly
+  tolerance_pct: 0.5                   # unit price rounded to 2dp per the document
+  optional_columns:
+    subscription_year: ["Subscription Year"]
+    order_term_months: ["Order Term (Months)"]
+optional_fields:
+  # a BARE LINE near the top with nothing labelling it, so there is no key to
+  # look up
+  marketplace: { pattern: '^((?:Azure|AWS|GCP|Google Cloud)[A-Za-z ]*(?:Private Offer|Marketplace))$' }
 ```
 
 The PO profiles are near-empty — POs are already structured. `purchase_order/brightops.yaml`
@@ -1455,10 +1536,11 @@ src/
   classify/issuer.ts        DB match patterns, incl. signature-block scope
   profiles/{schema.ts,loader.ts,seed.ts,resolve.ts,export.ts}
   extract/engine.ts         orchestrates per-field strategies
-  extract/strategies/       labelValue · multilineAfterLabel · signatureBlock
-                            (two_column | placeholder_lines | checkmark) · itemsTable · llmField
+  extract/strategies/       labelValue · patternValue · multilineAfterLabel
+                            twoColumnSignature (true | false | null) · sections (mask /
+                            scope, offset-preserving) · itemsTable · llmField
                             specialTerms (labelled_bullets | llm) · burstAttribution
-  extract/normalize/        date.ts · money.ts · netTerms.ts (word-number parser)
+  extract/normalize/        date.ts · money.ts · netTerms.ts (word-number parser) · coerce.ts
   extract/validate.ts       items sum vs amount, date ordering, required fields
   llm/client.ts             live | fixture | record modes
   llm/prompts/
@@ -1926,25 +2008,110 @@ every item column, and each special term — 48 per purchase order. Two delibera
 asserts `llmCalls === 0` for every purchase order, which keeps the "the rules already parse"
 claim honest rather than incidental.
 
-## Profile keys declared but not yet applied
+## Profile keys: declared, applied, or deleted
 
 Tracked explicitly, because a key that silently does nothing is worse than a missing one — it
-reads as working.
+reads as working configuration. **Phase 6 closed the last of them**, and the pattern across all
+nine is worth stating plainly: *every single one that was declared before being wired was wrong
+in some way by the time it got wired.* Four were no-op knobs, two were a strategy that turned
+out not to exist, and two needed a companion mechanism nobody had thought of. Declaring a key
+before implementing it does not reserve a design — it records a guess.
 
-| Key | Owner phase | Evidence it is still needed |
+| Key | Status | What wiring it actually revealed |
 |---|---|---|
-| `ignore_sections` | 7 | CloudShield extracts `po_amount: "USD 0.00"` from its own "Purchase Order Information" block |
-| `optional_fields` | 6–7 | CloudShield's `marketplace` and billing contacts are never captured |
-| `two_column_signature` | 6 | both order forms report `signature_present: null`, which escalates |
-| `placeholder_lines` | 7 | CloudShield's blank `Name: ____` lines should resolve to **false**, not null |
+| `two_column_signature` | ✅ applied | one capability, not two — see below |
+| `ignore_sections` | ✅ applied | needed a **companion**, `in_section`, or the mask deletes the data it protects |
+| `in_section` | ✅ new | the complement of the mask; also tighter than an exemption |
+| `optional_fields` | ✅ applied | its only declared field, `marketplace`, had the **value** written where a label belonged |
+| `pattern` | ✅ new | `Azure Private Offer` is a bare line; no label exists to look up |
+| `occurrence` | ✅ new | CloudShield reuses `Customer Billing Name:` for the org **and** the contact |
+| `type` | ✅ applied | declared from the start, never read — it was storing a whole sentence into `NUMERIC(6,2)` |
+| `default_currency` | ✅ applied | already implemented in the normaliser; **Acme had no profile file at all** |
+| `placeholder_lines` | ❌ deleted | never a strategy — `two_column_signature`'s `false` outcome |
+| `header_rows`, `wrapped_cells` | ❌ deleted | the reconstruction detects both from geometry |
 
-A declared-but-unimplemented *strategy* returns `null` and escalates rather than falling
-through to a plain label lookup — see the bug it caused above.
+A declared-but-unimplemented *strategy* returns `null` and escalates rather than falling through
+to a plain label lookup — see the bug it caused above. The schema now **rejects** every deleted
+key, so a stale `placeholder_lines:` fails at seed instead of reading as configuration.
 
-**Two keys were deleted rather than implemented.** `header_rows` and `wrapped_cells` were
-declared early and never read: the reconstruction detects the header block and joins wrapped
-cells from the geometry itself, so both were no-op knobs. The schema now *rejects* them, so
-setting one fails loudly instead of being accepted and ignored.
+### `ignore_sections` needs `in_section`, or it deletes what it protects
+
+CloudShield's order form carries its own block:
+
+```
+Purchase Order Information
+Is a Purchase Order (PO) required for the purchase or payment of the subscriptions …? No
+PO Number:
+PO Amount: USD 0.00
+```
+
+The classification trap was already handled by position weighting. The *extraction* trap is
+`PO Amount: USD 0.00`, and the real exposure is not CloudShield — whose own `amount` label is
+`Total Subscription Fee` — but the **base profile**, whose synonyms include a generic
+`Total Amount`. An unregistered order form with a similar block would store a zero contract
+total.
+
+But `po_number` and `po_amount` are real `order_form_details` columns that exist *for* that
+block. A blanket mask makes them permanently null: the knob would delete the very data it was
+added to protect. So the mask got a complement — `in_section`, which reads a field **only**
+from inside a named block. That is strictly better than exempting a field from the mask, because
+it also stops `PO Number:` matching somewhere else in an eight-page document. `po_required` came
+along for free: `type: boolean` over *"… required …? No"* → `false`, a column that had been
+permanently `NULL`.
+
+**The mask blanks characters with spaces rather than splicing them out, and keeps every
+newline.** The masked copy is the same length with the same line breaks, so every offset a
+locator returns still indexes into the original `raw_text` — which is what keeps the evidence
+span verifiable. Splicing would shift every later offset and quietly corrupt the trace. A test
+asserts the length and line count are unchanged, because that property is the whole file.
+
+### Where a block ends, when the file contains no structure
+
+A PDF has no sections, only lines, so the boundary has to be reconstructed. The rule: the
+heading, plus the run of lines carrying `:` or `?`, capped at 8 lines. That is a structural
+property of what these blocks **are** — key/value pairs and one question — not a guess about
+capitalisation, which matters because the design already paid for a shape heuristic once:
+`Canada`, alone on a line, is short, capitalised, comma-free and digit-free, and it truncated
+NovaFleet's billing address.
+
+It is also deliberately **forward-looking and bounded** rather than "walk back to the nearest
+heading". Both directions are imperfect; this one's failure mode is better. Over-masking a few
+lines turns a field into a flagged `NULL`, while a backwards walk that misses a boundary would
+ignore everything to the end of the document. The 8-line cap is a constant in code, not config —
+it exists to limit the blast radius of being wrong, and a profile raising it would be removing
+the guard rather than tuning it.
+
+On CloudShield the span lands on exactly the four lines above. A test asserts it does **not**
+swallow the signature block below it — which is read geometrically, so over-masking there would
+have been silent.
+
+### `pattern` and `occurrence`: labels first, always
+
+Two shapes no label covers, both from CloudShield:
+
+| | the document says | mechanism |
+|---|---|---|
+| `marketplace` | `Azure Private Offer` — a bare line near the top, nothing labelling it | `pattern`, capture group 1 |
+| vendor `address` | `…with its principal place of business at 500 Innovation Drive, San Jose,\nCA 95134, and the customer whose…` | `pattern`, anchored on standard legalese |
+| buyer `contact_name` | `Customer Billing Name:` — **twice**, for the org and for the person | `occurrence: 2` |
+
+**`find()` tries labels first and falls back to `pattern`.** A label is tied to an explicit
+statement in the document; a regex over prose is weaker evidence, so it only answers where no
+label does — the same precedence that already lets a labelled party name beat the inferred
+issuer. So the base profile's `Vendor Address` label is tried on every order form, and
+CloudShield's preamble pattern answers only because that label finds nothing.
+
+`occurrence` is declared rather than inferred for the reason above: the tempting alternative is
+*"the value that is not an organisation"*, which is another shape heuristic. It counts **per
+label**, so a profile listing its own wording first cannot shift the index of a later synonym.
+
+A pattern spanning a line break stores a whitespace-collapsed value while its **offsets stay on
+the original characters** — the same split as a joined multi-line address, or a `DATE` whose
+evidence reads `03-01-2025`.
+
+**Regexes in config introduce no new trust assumption.** They are reviewed in the repo and
+compiled at load time so a broken one fails at `npm run seed` rather than when the first document
+arrives — exactly the rule `customers.yaml` match patterns already follow.
 
 ## Implementation phases
 
@@ -2059,7 +2226,7 @@ half-extracted for a phase.
 *"shall be made within thirty (30) days from invoice"*, while **both POs still make zero
 calls** — asserted, not observed.
 
-### Phase 6 — the remaining extraction capabilities
+### Phase 6 — the remaining extraction capabilities ✅
 
 **Not "Acme" and not "CloudShield".** Labelling these by customer was the same error as
 declaring `strategy: llm` per customer, and it had a concrete cost: it would have produced a
@@ -2067,12 +2234,43 @@ strategy fitted to one document and then a second one for the other.
 
 | Capability | Exercised by | Previously mislabelled as |
 |---|---|---|
-| `two_column_signature` ✅ | **both** order forms | phase 6 "Acme" **and** phase 7 "CloudShield" |
+| `two_column_signature` ✅ | **both** order forms, **both** columns | phase 6 "Acme" **and** phase 7 "CloudShield" |
 | issuer → party name ✅ | both order forms | — (never planned) |
-| `default_currency` | Acme (no ISO code anywhere) | phase 6 "Acme" |
-| `ignore_sections` | CloudShield's decoy PO block | phase 7 |
-| `optional_fields` | CloudShield contacts, marketplace | phase 6–7 |
+| `default_currency` ✅ | Acme (no ISO code anywhere) | phase 6 "Acme" |
+| `ignore_sections` + `in_section` ✅ | CloudShield's decoy PO block | phase 7 |
+| `optional_fields` + `pattern` ✅ | CloudShield's marketplace, vendor address | phase 6–7 |
+| `type` coercion ✅ | CloudShield's subscription term, `po_required` | — (never planned) |
+| `occurrence` ✅ | CloudShield's duplicated billing label | — (never planned) |
 | fixture recording | any escalating document | phase 6 "Acme" |
+
+The mechanics of each are in **Profile keys: declared, applied, or deleted** above; what follows
+is what wiring them changed about the plan.
+
+**Three capabilities were not in the plan at all** — `pattern`, `occurrence` and applying
+`type`. Each exists because a *declared* key turned out to be unusable as written: the
+`marketplace` field had the document's **value** written where a label belonged, `contact_name`
+needed a label the document reuses for two different things, and `type` had been declared from
+the very first profile and never read, so CloudShield's `subscription_term_months` was storing
+
+```
+"(unless extended according to the terms of this Order Form): 36.00 months"
+```
+
+into a `NUMERIC(6,2)` column. That one is the clearest case of the pattern: the key was present,
+the YAML looked right, and nothing failed.
+
+**Acme had no profile file at all.** `default_currency` was already implemented in the money
+normaliser and the plan listed it as phase-6 work, which hid the actual gap — there was no
+`config/profiles/order_form/acme.yaml` for it to live in. Its date formats (`long_month` for
+the document, `short_month_compact` for the item table) and its TAM synonyms were missing with
+it. Nothing was broken; the fields were simply never attempted, which is the silent failure the
+order-form base profile audit also found.
+
+**The vendor's signature was one declaration, not new code.** The capability already reads
+either column and the pipeline already passes `left` for the vendor on an order form — but the
+base profile declared the buyer's four signature fields and not the vendor's, so Acme's plainly
+signed block (`John Smith`, `CFO`, `12-13-2024`) came back null. Same lesson as the base-profile
+audit: an undeclared field fails silently, while a failed rule escalates.
 
 #### Two strategies collapsed into one
 
@@ -2091,8 +2289,8 @@ yields three results rather than two:
 
 | | meaning |
 |---|---|
-| `true` | the column carries a filled value — Acme |
-| `false` | the block exists but is unfilled — CloudShield |
+| `true` | the column carries a filled value — Acme, both roles |
+| `false` | the block exists but is unfilled — CloudShield, both roles |
 | `null` | **no two-column block at all** — a PO. Escalates rather than asserting unsigned |
 
 Column positions are discovered from the document (the anchor line carrying the repeated
@@ -2107,10 +2305,35 @@ issuer **is** one of these parties: the vendor on an order form, the buyer on a 
 fills the gap (`Acme`, `CloudShield Security, Inc.`) while a label-based value always wins,
 since it is tied to an explicit statement in the document.
 
+#### Exit state
+
+Both order forms now extract every deterministic field. `tests/unit/orderFormCapabilities.test.ts`
+asserts each capability end to end on the real PDFs — every one of them had been declared and
+silently doing nothing, so each gets an assertion that fails if the wiring is removed — and the
+closing case asserts the only unanswered field on either document is the **prose payment term**:
+
+| | before phase 6 | after |
+|---|---|---|
+| Acme | `AMBIGUOUS_CURRENCY`, `FIELD_NOT_FOUND` | `FIELD_NOT_FOUND` only |
+| CloudShield | `FIELD_NOT_FOUND`, plus `po_amount` and `subscription_term_months` wrong | `FIELD_NOT_FOUND` only |
+
+Both POs still score **48/48** and make **zero** LLM calls, so none of this leaked into the
+documents that were already passing.
+
 ### Phase 7 — add the order forms to the scored set
 
-With the capabilities above in place, this is mostly configuration plus the first real fixture
-recording. **Exit: all four documents at ≥95%.**
+Every deterministic field on both order forms now extracts, so what remains is the **scoring**
+and the **escalating** half: `accuracy/expected/acme.json` and `cloudshield.json`, then recording
+the five real fixtures (both payment terms, CloudShield's billing frequency, both special-term
+sections) so the printed number comes from recorded model output rather than a mock.
+
+One correction to make here rather than earlier: `npm run accuracy` runs under `tsx`, not
+Vitest, so it inherits the `off` default instead of `fixture`. Harmless while only the POs are
+scored — neither escalates — and load-bearing the moment an order form enters the set, because
+`off` would flag `FIELD_NOT_FOUND` instead of replaying a fixture and the number would drop with
+nothing naming the cause.
+
+**Exit: all four documents at ≥95%.**
 
 ### Phase 8 — operational layer
 

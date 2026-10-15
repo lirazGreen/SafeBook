@@ -24,10 +24,35 @@ const FieldSpec = z
     money_format: MoneyFormat.optional(),
     /** Used only to resolve a bare ambiguous symbol such as `$`. */
     currency: z.string().length(3).optional(),
-    /** A named locator strategy, when a plain label lookup will not do. */
+    /**
+     * A regex, for the one-off shapes no label covers — CloudShield states its
+     * marketplace as a bare line, `Azure Private Offer`, with nothing labelling
+     * it. Capture group 1 is the value when present, else the whole match.
+     * Compiled at load time, so a broken pattern fails at seed.
+     */
+    pattern: z.string().min(1).optional(),
+    /** Which occurrence of the label to take, when a document reuses one. */
+    occurrence: z.number().int().positive().max(20).optional(),
+    /**
+     * Read this field ONLY from inside the named section. The complement of
+     * `ignore_sections`: CloudShield's `po_number` and `po_amount` live in the
+     * very block the mask excludes, so scoping them in is what keeps the mask
+     * from deleting the data it was added to protect.
+     */
+    in_section: z.string().min(1).optional(),
+    /**
+     * A named locator strategy, when a plain label lookup will not do.
+     *
+     * NOTE: no `placeholder_lines`. It was declared as a second strategy for
+     * CloudShield's blank `Name: ____` block before the geometry was checked —
+     * the two order forms' signature blocks are structurally identical, so it
+     * was never a strategy, only `two_column_signature`'s `false` outcome. Same
+     * policy as `header_rows`/`wrapped_cells`: the schema REJECTS a knob that
+     * does nothing rather than accepting and ignoring it.
+     */
     strategy: z
       .enum(['label_value', 'multiline_after_label', 'signature_marker',
-             'two_column_signature', 'placeholder_lines'])
+             'two_column_signature'])
       .optional(),
     /** For multiline_after_label. */
     max_lines: z.number().int().positive().max(10).optional(),

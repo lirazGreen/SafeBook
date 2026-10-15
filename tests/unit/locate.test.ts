@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import {
-  labelValue, labelledBullets, multilineAfterLabel, signatureMarker,
+  labelValue, labelledBullets, multilineAfterLabel, patternValue, signatureMarker,
 } from '../../src/extract/strategies/locate.ts';
 
 const brightops = readFileSync('tests/fixtures/text/brightops.txt', 'utf8');
@@ -117,5 +117,56 @@ describe('labelledBullets — special terms on a PO', () => {
 
   it('returns [] on an order form — numbered prose with no labels — which escalates', () => {
     expect(labelledBullets(acme, 'Special Terms', TYPE_LABELS)).toEqual([]);
+  });
+});
+
+describe('occurrence — one label reused for two different things', () => {
+  // CloudShield writes BOTH of these, with the same label:
+  //   Customer Billing Name: TechNova Solutions, Inc.   <- the organisation
+  //   Customer Billing Name: Sarah Thompson             <- the billing contact
+  const cloudshield = readFileSync('tests/fixtures/text/cloudshield.txt', 'utf8');
+
+  it('defaults to the first', () => {
+    expect(labelValue(cloudshield, ['Customer Billing Name'])?.text)
+      .toBe('TechNova Solutions, Inc.');
+  });
+
+  it('takes the declared occurrence', () => {
+    expect(labelValue(cloudshield, ['Customer Billing Name'], { occurrence: 2 })?.text)
+      .toBe('Sarah Thompson');
+  });
+
+  it('counts PER LABEL, so a synonym list does not shift the index', () => {
+    // buyer.name lists its exact wording first; that label matching zero times
+    // must not make the next label's first match look like its second.
+    expect(labelValue(cloudshield, ['Customer Billing Company Name', 'Customer Billing Name'])?.text)
+      .toBe('TechNova Solutions, Inc.');
+  });
+
+  it('returns null when the occurrence does not exist', () => {
+    expect(labelValue(cloudshield, ['Customer Billing Name'], { occurrence: 9 })).toBeNull();
+  });
+});
+
+describe('patternValue — the one-off shapes no label covers', () => {
+  const cloudshield = readFileSync('tests/fixtures/text/cloudshield.txt', 'utf8');
+
+  it('captures a bare unlabelled line', () => {
+    // "Azure Private Offer" sits near the top with nothing labelling it.
+    const found = patternValue(cloudshield, '^((?:Azure|AWS|GCP)[A-Za-z ]*(?:Private Offer|Marketplace))$')!;
+    expect(found.text).toBe('Azure Private Offer');
+    expect(cloudshield.slice(found.start, found.end)).toBe('Azure Private Offer');
+  });
+
+  it('collapses whitespace in a value that straddles a line break, keeping offsets on the original', () => {
+    // The vendor address is wrapped mid-value: "San Jose," / newline / "CA 95134".
+    const found = patternValue(
+      cloudshield, 'principal place of business at ([^,]+,\\s*[^,]+,\\s*[A-Z]{2}\\s*\\d{5})')!;
+    expect(found.text).toBe('500 Innovation Drive, San Jose, CA 95134');
+    expect(cloudshield.slice(found.start, found.end)).toContain('\n');
+  });
+
+  it('is null rather than throwing when nothing matches', () => {
+    expect(patternValue(cloudshield, 'Remittance ABA: (\\d+)')).toBeNull();
   });
 });

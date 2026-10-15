@@ -7,11 +7,49 @@ fields:
     money_format: code_prefix          # "USD 23,640,000.00"
   start_date: { labels: ["Subscription Start Date"], input_format: slash_mdy }
   end_date:   { labels: ["Subscription End Date"],   input_format: slash_mdy }
-  buyer_signature_present:
-    strategy: placeholder_lines        # "Name: ______" still blank => false
+  # NOTE: no `buyer_signature_present` here. An earlier draft declared one with
+  # `strategy: placeholder_lines`, which was dead twice over — the pipeline reads
+  # `parties.buyer.signature_present`, and the geometry showed both order forms'
+  # signature blocks are structurally identical, so blank underscores are
+  # `two_column_signature`'s `false` outcome rather than a second strategy. The
+  # schema now rejects the name, so the stale key fails loudly instead of reading
+  # as working configuration.
 
-# Its own "Purchase Order Information" block holds PO Amount: USD 0.00, which
-# would otherwise be picked up as the contract total.
+parties:
+  buyer:
+    # CloudShield reuses ONE label for two different things:
+    #   Customer Billing Name: TechNova Solutions, Inc.   <- the organisation
+    #   Customer Billing Name: Sarah Thompson             <- the billing contact
+    # `name` takes the first; the contact declares which occurrence it is.
+    # Declared, not inferred: "the value that is not an organisation" is a shape
+    # heuristic, and the design has already paid for one of those.
+    contact_name:
+      labels: ["Customer Billing Name"]
+      occurrence: 2
+  vendor:
+    # An order form never labels its vendor's address — CloudShield states it
+    # once, inside the legal preamble:
+    #
+    #   "…CloudShield Security, Inc., a company incorporated under the laws of
+    #    the State of California, with its principal place of business at
+    #    500 Innovation Drive, San Jose, CA 95134, and the customer whose…"
+    #
+    # The base profile's "Vendor Address" label is tried first and finds nothing,
+    # so this fallback answers. The anchor phrase is standard contract legalese
+    # rather than anything CloudShield-specific, which is why the pattern is
+    # worth having at all.
+    address:
+      # `\s*` rather than a literal space: the value is wrapped mid-address
+      # ("San Jose," / newline / "CA 95134"), which is also why patternValue
+      # collapses whitespace in the stored value while the offsets stay on the
+      # document's original characters.
+      pattern: 'principal place of business at ([^,]+,\s*[^,]+,\s*[A-Z]{2}\s*\d{5})'
+
+# Its own "Purchase Order Information" block holds `PO Amount: USD 0.00`, which a
+# generic `Total Amount` synonym from the base profile would match as the
+# contract total. The mask blanks it for every document-level lookup while
+# preserving offsets, and the base profile's `po_required` / `po_number` /
+# `po_amount` scope themselves back into it with `in_section`.
 ignore_sections: ["Purchase Order Information"]
 
 items:
@@ -24,5 +62,10 @@ items:
     order_term_months: ["Order Term (Months)"]
 
 optional_fields:
-  marketplace:              { labels: ["Azure Private Offer"] }
-  subscription_term_months: { labels: ["Subscription Term (months)"], type: number }
+  # Stated as a BARE LINE near the top — `Azure Private Offer` — with nothing
+  # labelling it, so there is no key to look up. A profile-declared regex is the
+  # general tool for a one-off shape like this, and it carries no new trust
+  # assumption: config is reviewed in the repo and compiled at load time, exactly
+  # as `customers.yaml` match patterns already are.
+  marketplace:
+    pattern: '^((?:Azure|AWS|GCP|Google Cloud)[A-Za-z ]*(?:Private Offer|Marketplace))$'

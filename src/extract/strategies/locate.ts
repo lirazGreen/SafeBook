@@ -58,10 +58,34 @@ function isLabelLine(line: string): boolean {
  * Labels are tried IN ORDER, so a profile can put its customer's exact wording
  * first and let the base profile's synonyms follow.
  */
-export function labelValue(raw: string, labels: string[]): Located | null {
+export interface LabelValueOptions {
+  /**
+   * Which occurrence of the label to take, 1-based. Needed because CloudShield
+   * reuses ONE label for two different things:
+   *
+   *     Customer Billing Name: TechNova Solutions, Inc.   <- the organisation
+   *     Customer Billing Name: Sarah Thompson             <- the billing contact
+   *
+   * Declared per customer rather than inferred. The tempting alternative is a
+   * shape test ("the one that is not an organisation"), and the design has
+   * already paid for that kind of heuristic once — a short capitalised line,
+   * `Canada`, is indistinguishable from a section heading by shape and
+   * truncated NovaFleet's address. An explicit occurrence is honest about
+   * being a quirk of this document.
+   */
+  occurrence?: number | undefined;
+}
+
+export function labelValue(
+  raw: string,
+  labels: string[],
+  options: LabelValueOptions = {},
+): Located | null {
+  const want = options.occurrence ?? 1;
   const ls = lines(raw);
   for (const label of labels) {
     const needle = label.toLowerCase();
+    let seen = 0;
     for (const line of ls) {
       const body = line.text.replace(BULLET, '');
       const offset = line.start + (line.text.length - body.length);
@@ -69,12 +93,52 @@ export function labelValue(raw: string, labels: string[]): Located | null {
       if (idx !== 0) continue;                   // the label must START the line
       const after = body.slice(needle.length).replace(/^\s*:\s*/, '');
       if (after.length === 0) continue;          // value is on following lines
+      // Counted PER LABEL, so a profile listing its exact wording first still
+      // gets occurrence 1 of that wording rather than of the synonym list.
+      if (++seen < want) continue;
       const start = offset + body.length - after.length;
       return { text: after.trim(), start, end: start + after.length };
     }
   }
   return null;
 }
+
+/**
+ * A profile-declared regex, for the one-off shapes no label covers.
+ *
+ * CloudShield states its marketplace as a bare line near the top —
+ * `Azure Private Offer` — with nothing labelling it, so there is no key to look
+ * up. Capture group 1 is the value when the pattern has one, else the whole
+ * match.
+ *
+ * Patterns come from config, which is the same trust level as code: reviewed in
+ * the repo and compiled at load time so a broken one fails at seed rather than
+ * when the first document arrives. That is the rule `customer_match_patterns`
+ * already follows, so this introduces no new trust assumption.
+ */
+export function patternValue(raw: string, pattern: string): Located | null {
+  const re = new RegExp(pattern, 'm');
+  const m = re.exec(raw);
+  if (m === null || m.index === undefined) return null;
+  const group = m[1];
+  if (group === undefined) {
+    return { text: flatten(m[0]), start: m.index, end: m.index + m[0].length };
+  }
+  const offset = m[0].indexOf(group);
+  const start = m.index + (offset === -1 ? 0 : offset);
+  return { text: flatten(group), start, end: start + group.length };
+}
+
+/**
+ * A match can straddle a line break — CloudShield's vendor address is wrapped
+ * mid-value as `San Jose,\nCA 95134` — so the STORED value collapses whitespace
+ * while the OFFSETS keep pointing at the original characters.
+ *
+ * The stored value and its evidence are deliberately different things, the same
+ * way a multi-line address is stored joined and a date is stored as a DATE while
+ * its evidence reads "03-01-2025".
+ */
+const flatten = (text: string) => text.replace(/\s+/g, ' ').trim();
 
 /**
  * `Label:` alone on its line, with the value on the lines beneath — how both POs

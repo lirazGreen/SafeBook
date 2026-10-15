@@ -1,0 +1,32 @@
+# Deltas from order_form/_base.yaml. Identity lives in config/customers.yaml.
+extends: _base
+
+# Acme's document contains NO ISO 4217 code anywhere — every amount is a bare
+# `$152,500`. `$` is genuinely ambiguous (USD/CAD/AUD/NZD/SGD/HKD/MXN), so
+# resolution rule 1 ("exactly one distinct code in the document") finds nothing
+# and rule 2 applies: the profile declares it.
+#
+# Declared rather than inferred ON PURPOSE. The tempting inference is the billing
+# address, and NovaFleet is the counterexample sitting in the same sample set —
+# its buyer is in Toronto, so geography yields CAD against a document whose own
+# total reads `$451,000 USD`. A currency is never guessed from an address.
+default_currency: USD
+
+fields:
+  amount:
+    labels: ["Total fee"]
+    money_format: symbol_prefix        # "$152,500"
+  start_date: { labels: ["Start Date"], input_format: long_month }   # "January 1, 2025"
+  end_date:   { labels: ["End Date"],   input_format: long_month }
+
+items:
+  date_format: short_month_compact     # "Jan 1,2025" — abbreviated, no space after the comma
+
+special_terms:
+  # Acme never writes the phrase "Technical Account Manager" — it names two roles
+  # instead. This is exactly the per-customer customisation the brief asks for,
+  # and it is a wording HINT passed to Claude, not a locator: the terms are
+  # numbered prose with no labels, so the bullet parse finds nothing and this
+  # section escalates.
+  synonyms:
+    technical_account_manager: ["Customer Support Manager", "Product Architect"]

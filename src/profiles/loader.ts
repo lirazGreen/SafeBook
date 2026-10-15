@@ -30,7 +30,31 @@ async function readProfile(path: string): Promise<ProfileDefinition> {
     // Strict schema: an unknown key reports here rather than silently disabling a field.
     throw new Error(`Invalid profile ${path}:\n${issues}`);
   }
+  compilePatterns(parsed.data, path);
   return parsed.data;
+}
+
+/**
+ * Compiles every `pattern` now, so a broken regex fails at SEED time rather than
+ * when the first document from that customer arrives — the same rule
+ * `customers.yaml` match patterns already follow.
+ */
+function compilePatterns(def: ProfileDefinition, path: string): void {
+  const groups: Record<string, unknown>[] = [
+    def.fields ?? {}, def.type_fields ?? {}, def.optional_fields ?? {},
+    def.parties?.buyer ?? {}, def.parties?.vendor ?? {},
+  ];
+  for (const group of groups) {
+    for (const [name, spec] of Object.entries(group)) {
+      const pattern = (spec as { pattern?: string }).pattern;
+      if (pattern === undefined) continue;
+      try {
+        new RegExp(pattern, 'm');
+      } catch (err) {
+        throw new Error(`${path}: field "${name}" has an invalid pattern /${pattern}/: ${(err as Error).message}`);
+      }
+    }
+  }
 }
 
 /**

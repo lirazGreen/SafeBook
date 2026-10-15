@@ -11,8 +11,11 @@ import { parseDate, type DateFormat } from './normalize/date.ts';
 import { parseMoney, resolveDocumentCurrency } from './normalize/money.ts';
 import { parseNetTerms } from './normalize/netTerms.ts';
 import {
-  labelValue, labelledBullets, multilineAfterLabel, signatureMarker,
+  DEFAULT_SECTION_HEADINGS, labelValue, labelledBullets, multilineAfterLabel,
+  patternValue, signatureMarker,
 } from './strategies/locate.ts';
+import { maskSections, keepOnlySection } from './strategies/sections.ts';
+import { coerce, type ValueType } from './normalize/coerce.ts';
 import { readTwoColumnSignature } from './strategies/twoColumnSignature.ts';
 import { dateEnvelope, validate, type ReviewReason } from './validate.ts';
 import type { Escalator, FieldSource } from './engine.ts';
@@ -65,7 +68,8 @@ export interface ExtractionResult {
   billingFrequency: string | null;
   attributes: Record<string, unknown>;
   parties: PartyRecord[];
-  typeDetails: Record<string, string | null>;
+  /** boolean for a declared `type: boolean` field such as the order form`s po_required. */
+  typeDetails: Record<string, string | boolean | null>;
   items: ItemRecord[];
   specialTerms: SpecialTermRecord[];
   reviewReasons: ReviewReason[];
@@ -148,18 +152,60 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
   if (resolved === null) throw new Error(`NO_ACTIVE_PROFILE for doc_type=${docType}`);
   const def = resolved.definition;
 
+  // ---- 3b. the text a lookup is allowed to see
+  //
+  // `ignore_sections` blanks a block that is not part of the contract, and the
+  // mask PRESERVES OFFSETS (spaces, not splices) so every evidence span still
+  // indexes into the original raw_text. CloudShield's order form carries its own
+  // "Purchase Order Information" block with `PO Amount: USD 0.00`; without the
+  // mask a generic `Total Amount` synonym from the base profile would match it
+  // and store a zero contract total.
+  const headings = def.section_headings ?? DEFAULT_SECTION_HEADINGS;
+  const searchText =
+    def.ignore_sections !== undefined && def.ignore_sections.length > 0
+      ? maskSections(rawText, def.ignore_sections, headings)
+      : rawText;
+
+  type Spec = NonNullable<ProfileDefinition['fields']>[string];
+
+  /** `in_section` scopes a field INTO a block; everything else reads the mask. */
+  const textFor = (spec: Spec | undefined): string =>
+    spec?.in_section !== undefined ? keepOnlySection(rawText, spec.in_section, headings) : searchText;
+
+  /**
+   * One entry point for every scalar locator, so a new option reaches them all.
+   *
+   * LABELS FIRST, pattern as the fallback. A label is tied to an explicit
+   * statement in the document; a regex over prose is weaker evidence, so it only
+   * answers where no label does — the same precedence that already lets a
+   * labelled party name beat the inferred issuer.
+   */
+  const find = (spec: Spec | undefined): { text: string; start: number; end: number } | null => {
+    if (spec === undefined) return null;
+    const text = textFor(spec);
+    const byLabel = labelValue(text, spec.labels ?? [], { occurrence: spec.occurrence });
+    if (byLabel !== null) return byLabel;
+    return spec.pattern !== undefined ? patternValue(text, spec.pattern) : null;
+  };
+
+  /** Applies `type`, with dates still routed through the declared input_format. */
+  const typed = (spec: Spec, found: { text: string }): string | boolean | null =>
+    spec.type === 'date' || spec.input_format !== undefined || spec.input_formats !== undefined
+      ? dateFrom(found.text, spec)
+      : coerce(found.text, spec.type as ValueType | undefined);
+
   // ---- 4. document-level fields
   const field = (name: string) => def.fields?.[name];
   const labelsOf = (name: string) => field(name)?.labels ?? [];
 
-  const startRaw = labelValue(rawText, labelsOf('start_date'));
-  const endRaw = labelValue(rawText, labelsOf('end_date'));
+  const startRaw = find(field('start_date'));
+  const endRaw = find(field('end_date'));
   const startDate = startRaw ? dateFrom(startRaw.text, field('start_date')) : null;
   const endDate = endRaw ? dateFrom(endRaw.text, field('end_date')) : null;
   record('start_date', startDate, startDate ? 'rule' : null, startRaw);
   record('end_date', endDate, endDate ? 'rule' : null, endRaw);
 
-  const amountRaw = labelValue(rawText, labelsOf('amount'));
+  const amountRaw = find(field('amount'));
   const money = amountRaw ? parseMoney(amountRaw.text, field('amount')?.money_format) : null;
   const docCurrency = resolveDocumentCurrency(rawText, def.default_currency);
   const currency = money?.currency ?? docCurrency.currency;
@@ -168,7 +214,7 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     reviewReasons.push('AMBIGUOUS_CURRENCY');
   }
 
-  const termsRaw = labelValue(rawText, labelsOf('payment_terms'));
+  const termsRaw = find(field('payment_terms'));
   let paymentTermsDays = termsRaw ? parseNetTerms(termsRaw.text) : null;
   let llmCalls = 0;
   if (paymentTermsDays === null) {
@@ -183,7 +229,7 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
   }
   record('payment_terms_days', paymentTermsDays, paymentTermsDays === null ? null : (termsRaw && parseNetTerms(termsRaw.text) !== null ? 'rule' : 'llm'), termsRaw);
 
-  const freqRaw = labelValue(rawText, labelsOf('billing_frequency'));
+  const freqRaw = find(field('billing_frequency'));
   const billingFrequency = str(freqRaw);
   record('billing_frequency', billingFrequency, billingFrequency ? 'rule' : null, freqRaw);
 
@@ -211,13 +257,13 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
       if (s === undefined) return null;
       switch (s.strategy) {
         case 'multiline_after_label':
-          return multilineAfterLabel(rawText, s.labels ?? [], {
+          return multilineAfterLabel(textFor(s), s.labels ?? [], {
             maxLines: s.max_lines ?? 4,
-            ...(def.section_headings ? { stopAt: def.section_headings } : {}),
+            stopAt: headings,
           });
         case undefined:
         case 'label_value':
-          return labelValue(rawText, s.labels ?? []);
+          return find(s);
         default:
           // A strategy is DECLARED but not implemented yet. Return null so the
           // field escalates, rather than falling through to a plain label lookup.
@@ -237,7 +283,7 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
         ? (twoCol.signaturePresent === null ? null : { value: twoCol.signaturePresent, at: null })
         : sigSpec === undefined ? null
         : sigSpec.strategy !== undefined && sigSpec.strategy !== 'signature_marker' ? null
-        : signatureMarker(rawText, sigSpec.labels ?? []);
+        : signatureMarker(textFor(sigSpec), sigSpec.labels ?? []);
     // through pick(), so an unimplemented strategy returns null here too rather
     // than a plain label lookup finding the WRONG column's date
     const dateSpec = spec['signature_date'];
@@ -280,14 +326,30 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
   }
 
   // ---- 6. type-specific details
-  const typeDetails: Record<string, string | null> = {};
+  const typeDetails: Record<string, string | boolean | null> = {};
   for (const [name, spec] of Object.entries(def.type_fields ?? {})) {
-    const found = labelValue(rawText, spec.labels ?? []);
+    const found = find(spec);
     if (found === null) { typeDetails[name] = null; continue; }
-    typeDetails[name] = (spec.input_format !== undefined || spec.input_formats !== undefined)
-      ? dateFrom(found.text, spec)
-      : found.text;
+    typeDetails[name] = typed(spec, found);
     record(`type.${name}`, typeDetails[name], 'rule', found);
+  }
+
+  // ---- 6b. optional fields -> documents.attributes
+  //
+  // The brief's nine fields get typed columns; anything else a profile declares
+  // lands in JSONB, so adding one is a YAML change rather than a migration.
+  //
+  // Captured ONLY when a profile declares it, never speculatively: that is what
+  // bounds natural-language capture. Acme's GDPR sentence and CloudShield's
+  // Exhibit A definitions stay in raw_text unless someone asks for them.
+  const optional: Record<string, unknown> = {};
+  for (const [name, spec] of Object.entries(def.optional_fields ?? {})) {
+    const found = find(spec);
+    if (found === null) continue;
+    const value = typed(spec, found);
+    if (value === null) continue;
+    optional[name] = value;
+    record(`attributes.${name}`, value, 'rule', found);
   }
 
   // ---- 7. items
@@ -372,7 +434,10 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     currency,
     paymentTermsDays,
     billingFrequency,
-    attributes: Object.keys(itemFieldSources).length > 0 ? { field_sources: itemFieldSources } : {},
+    attributes: {
+      ...optional,
+      ...(Object.keys(itemFieldSources).length > 0 ? { field_sources: itemFieldSources } : {}),
+    },
     parties,
     typeDetails,
     items: mapped.items,

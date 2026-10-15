@@ -42,8 +42,13 @@ parties:
       labels: ["Customer Billing Phone", "Billing Phone"]
     # Order forms carry a TWO-COLUMN signature block, so both columns collapse
     # onto single text lines and "Name:" appears twice with nothing in the text
-    # to separate them. Only x-coordinates can. Until that strategy exists these
-    # return null, which ESCALATES rather than asserting the contract is unsigned.
+    # to separate them. Only x-coordinates can — the column positions are
+    # discovered from the anchor line, which is why Acme (x=77/311) and
+    # CloudShield (x=96/312) both work with no constants.
+    #
+    # Three outcomes: a filled column => true (Acme), a block of blank
+    # underscores => false (CloudShield), NO block at all => null, which
+    # escalates rather than asserting the contract is unsigned.
     signature_present:
       labels: ["Buyer Signature", "Customer Signature"]
       strategy: two_column_signature
@@ -59,16 +64,39 @@ parties:
       labels: ["Vendor Name", "Supplier Name"]
     address:
       labels: ["Vendor Address"]
+    # The SAME capability, reading the other column. An order form is issued by
+    # the vendor, which sits LEFT, and the pipeline passes that automatically —
+    # so this is a declaration, not a second strategy. Without it the vendor's
+    # signature stayed null on documents that plainly carry it (Acme: John Smith,
+    # CFO, 12-13-2024).
+    signature_present: { strategy: two_column_signature }
+    signer_name:       { strategy: two_column_signature }
+    signer_title:      { strategy: two_column_signature }
+    signature_date:    { strategy: two_column_signature, input_formats: [dash_mdy, long_month] }
 
 type_fields:
   quote_number:             { labels: ["Quote Number"] }
   quote_date:               { labels: ["Quote Date"], input_formats: [long_month, slash_mdy] }
   quote_expiration_date:    { labels: ["Quote Expiration Date"], input_formats: [long_month, slash_mdy] }
   proposed_by:              { labels: ["Proposed By"] }
+  # `type: number` matters here rather than being decoration: CloudShield writes
+  # "Subscription Term (months) (unless extended … this Order Form): 36.00 months",
+  # so the label is followed by a parenthetical BEFORE the value and the raw tail
+  # is not a number. Until the type was applied this stored that whole sentence
+  # into a NUMERIC(6,2) column.
   subscription_term_months: { labels: ["Subscription Term (months)"], type: number }
-  # CloudShield's own "Purchase Order Information" block — the classification trap.
-  po_number:                { labels: ["PO Number"] }
-  po_amount:                { labels: ["PO Amount"] }
+  # An order form may carry the BUYER's own PO reference in its own block. On
+  # CloudShield that block is also the classification trap, and `ignore_sections`
+  # masks it — so these three scope themselves back INTO it with `in_section`.
+  # Masking without that would delete the very data the mask was added to
+  # protect; scoping is also strictly tighter than an exemption, since it stops
+  # "PO Number" matching elsewhere in an eight-page document.
+  po_required:
+    labels: ["Is a Purchase Order (PO) required"]
+    in_section: "Purchase Order Information"
+    type: boolean
+  po_number:                { labels: ["PO Number"], in_section: "Purchase Order Information" }
+  po_amount:                { labels: ["PO Amount"], in_section: "Purchase Order Information" }
 
 items:
   column_synonyms:
