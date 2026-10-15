@@ -2730,12 +2730,38 @@ submitted from a browser and the results browsed interactively. That covers most
 deferred read-only HTML page would have provided, for no extra code — which is why the UI stays
 out of scope rather than becoming a phase.
 
-### Phase 10 — README + polish
+### Phase 10 — README ✅
 
-Setup, the customer/buyer/vendor terminology, how to add a fifth customer, the drift demo, the
-accuracy number — and a **Limitations** section stating plainly that image-only scanned PDFs
-are unsupported (detected as `NO_TEXT_LAYER`, never silently mis-extracted), that there is no
-UI, and that auth is out of scope.
+`README.md` is the brief's second deliverable, written for a reviewer who wants to run it in two
+minutes, understand why each decision was made, and verify the accuracy claim themselves.
+
+Every command, output block and number in it was **executed against the running stack** rather
+than written from memory — the `POST /scan` responses, the `GET /documents` table, the evidence
+span (`start: 777, end: 789, "$162,000 USD"`) and the `PATCH` rejection are all real output.
+Two things that caught, which is the argument for doing it that way:
+
+- The scan example had been written as the *idealised* `enqueued: 4`. The real first call returns
+  **`unstable: 4`** — the write-stability gate holding back files copied moments ago, which is a
+  feature worth showing rather than an inconvenience to hide. The second call returns
+  `duplicate: 4`, because the polling timer got there first.
+- The integration test count was stated as 38 and is 39.
+
+It documents `docs/DESIGN.md` as the long form: *"where the reasoning lives — including the parts
+that were wrong first."* The split is deliberate. The README answers "how do I use this and why
+is it built this way"; DESIGN.md keeps the full record, including every design that had to be
+reversed.
+
+#### The Limitations section states what does not work
+
+Eight entries, because a reviewer should not have to discover them: no OCR (image-only scans fail
+fast as `NO_TEXT_LAYER` rather than silently extracting nothing), nine prose values awaiting one
+recording run, no UI beyond Swagger, **no authentication at all** — every endpoint is open and
+`GET /jobs/{id}` exposes a worker hostname, so it is explicitly not deployable as-is — one
+document-type pair, a new date or money *format* needing code rather than config, Burst→item
+attribution as the softest extraction, and a single serial worker.
+
+It also separates the four assumptions the assigner **confirmed by email** from the two scoped out
+by decision, so a reader can tell which constraints were verified and which were chosen.
 
 **Weighting:** phases 7 and 9 are the heaviest. Phases 0, 2 and 3 are small but unblock
 everything after them.
