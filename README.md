@@ -201,6 +201,97 @@ and the value must be derivable from that quote — or it is **rejected rather t
 
 ---
 
+## Database
+
+PostgreSQL 16, eleven tables, one migration (`src/db/migrations/001_init.sql`). Hand-written SQL
+and a thin repository layer rather than an ORM — the schema *is* the design here, and most of the
+decisions below are visible in it.
+
+```
+customers ──< customer_match_patterns        how an issuer in the text maps to a customer
+    │
+    ├──< extraction_profiles                 the rules; versioned, append-only
+    │                                        customer_id NULL = the base profile
+    └──< documents                           one row per PDF; the brief's nine fields
+           ├──< document_parties             buyer + vendor, keyed (document_id, role)
+           ├──1  order_form_details      ┐   exactly one of the two,
+           ├──1  purchase_order_details  ┘   chosen by doc_type
+           ├──< document_items
+           │       └──< special_terms        item_id NULL = document-scoped
+           ├──< extraction_runs              append-only audit; pins the profile version
+           └──< jobs                         the queue, claimed with SKIP LOCKED
+
+      ──<  one-to-many        ──1  one-to-one
+```
+
+`special_terms` carries `document_id` as well as `item_id`, so a document-scoped term needs no
+item row to hang off.
+
+### Configuration — projected from YAML, never edited by hand
+
+| table | purpose |
+|---|---|
+| `customers` | SafeBook's customers: the **issuers**. `slug`, `name`. |
+| `customer_match_patterns` | How an issuer in the text maps to a customer. `kind` is `text`, `signature_block` or `doc_id`, which *scopes* the search — Acme's name occurs exactly once in its whole document, in the signature block, so a whole-text search would be too weak. **No `weight` column**: resolution is a *count*, not a score. Exactly one match wins; two or more is `ambiguous` and gets flagged, because letting a heavier pattern win silently would be guessing. |
+| `extraction_profiles` | The per-customer, per-doc-type extraction rules, as JSONB. **Append-only and versioned** — a change inserts `version+1` rather than mutating, because `extraction_runs.profile_id` needs an immutable record of the rules that produced each value. `definition` holds the **merged** result (`extends: _base` resolved once at seed time), so a row is self-contained and the audit never needs a re-merge that might behave differently later. `customer_id IS NULL` **is** the base-profile case — one lookup rule, no sentinel customer row. Two partial unique indexes enforce one version number per pair and at most one `is_active`. |
+
+`npm run seed` is the only writer of these three. YAML in git is the single source of truth; the
+pipeline reads only the database.
+
+### Documents
+
+| table | purpose |
+|---|---|
+| `documents` | One row per PDF, holding the brief's nine fields as **current values**. `file_sha256` is `UNIQUE` — that one constraint is the whole idempotency story. `raw_text` is stored at first extraction and then **frozen**, because evidence offsets index into it. Positioned layout is deliberately *not* stored: a reprocess re-parses the archived PDF, so parser improvements apply retroactively. |
+| `document_parties` | Both parties, both document types, keyed `(document_id, role)`. Symmetric because which role is SafeBook's customer *inverts* by type. All four samples name both, with wildly different completeness — Acme's vendor has a name and a signature but **no address anywhere in the document** — and varying completeness becomes NULLs here rather than columns scattered across three tables. |
+| `order_form_details`<br>`purchase_order_details` | 1:1 extensions holding only what is genuinely type-specific: `quote_number`, `po_required`… / `po_number`, `po_date`. Real typed columns with real `NOT NULL`s, which a shared table could not have. |
+| `document_items` | The line items. `product_name` is **nullable on purpose**: if the table parse cannot recover it, the row's money still reconciles and is worth keeping — `NOT NULL` would force dropping the row and break the `Σ items == amount` check that validates all four samples. `field_sources` records provenance for values *not* read directly off the page (`inherited`, `filled_down`, `from_document`), and `has_inferred` is a `GENERATED` column over it, so "show me anything inferred" is an index lookup. |
+| `special_terms` | Natural-language terms, one row each. `term_text` is the **source of truth, as received**; `percent`, `cap_value`, `period`, `applies_to` are a *projection* of it written once at extraction, not derived per request — CloudShield's burst paragraph contains 38.89%, 28.21% **and** 19.05%, so choosing the right one needs item context only the extraction stage has. `item_id IS NULL` means document-scoped; there is **no `scope` column**, because it would be pure duplication of that test. `term_type` is `TEXT` not an enum, so a new kind of term needs no migration. |
+
+**Why one `documents` table rather than `order_forms` + `purchase_orders`:** the brief's nine
+fields are identical for both types, so two tables would duplicate every one of them. More
+decisively, `doc_type` is **unknown at insert time** — `needs_classification` is a real state — so
+split tables leave an unclassified document with no home, and `PATCH /documents/:id {docType}`
+degrades from an `UPDATE` into a cross-table move dragging items, terms and runs with it.
+
+### Audit and operations
+
+| table | purpose |
+|---|---|
+| `extraction_runs` | Append-only, one row per attempt. Carries `field_confidence` — per field, the value, the strategy that found it, and the **evidence span** `{page, start, end, text}` — plus `profile_id` pinning the exact rules version, `llm_calls`, and the outcome. It holds **no duplicated field values**, so current-state queries stay a single join while history is still answerable: after a profile fix the audit shows `v2 → null, v3 → 23,640,000.00` with nothing overwritten. |
+| `jobs` | The queue. Postgres *is* the queue — no Redis. Claimed with `FOR UPDATE SKIP LOCKED`. `attempts` is incremented **at claim time**, not on failure, which is what stops a worker crash-looping on one document from retrying forever. Two partial unique indexes do the deduplication: `(document_id, kind) WHERE status IN ('queued','running')` means the same work cannot be queued twice, and `(kind) WHERE document_id IS NULL AND …` makes repeat `POST /scan` calls coalesce instead of piling up sweeps. |
+
+### Two schema decisions worth defending
+
+**`CHECK` constraints encode our own formats, never assumptions about the world.** A violated
+`CHECK` aborts the transaction and discards *everything*, so a constraint that encodes a guess
+turns one odd value into total data loss. `CHECK (amount >= 0)` was in an earlier draft and is
+exactly that mistake — a credit line is legitimate, and CloudShield itself carries a `$412,583.67`
+credit. So `currency ~ '^[A-Z]{3}$'` stays a constraint (if that fails, *our normaliser* is
+broken and should be loud), while `amount >= 0` and `end_date >= start_date` are **validation
+warnings** that flag for review. Validation never blocks persistence: partial data with a clear
+flag beats no data.
+
+**Money is `NUMERIC` and dates are `DATE`, never formatted strings.** `22916.67 × 12` only
+reconciles to `275,000.00` without float error, and the brief's `mm-dd-yyyy` / `Net xx` are
+*output* formats applied by one serialiser at the API boundary — storing them would break ordering
+and range queries. The driver needed explicit type parsers to stop undoing this (`src/db/types.ts`):
+node-postgres parses a `DATE` into a JS `Date` at **local midnight**, which in UTC+3 made
+`2025-03-01` come out of the API as `02-28-2025`. The database was right the whole time; only the
+read path was wrong.
+
+### Looking at it
+
+```bash
+docker compose exec postgres psql -U safebook -d safebook
+\dt                      -- the eleven tables
+\d documents             -- columns, constraints, indexes
+```
+
+Any Postgres client works against `localhost:5432` (`safebook` / `safebook` / `safebook`).
+
+---
+
 ## Adding a fifth customer
 
 One entry in `config/customers.yaml`, plus a profile file only if the base one does not already

@@ -411,6 +411,11 @@ differently and one of them costs money per attempt:
 
 ## Database schema
 
+> The README has a shorter table-by-table tour of the same schema, aimed at a
+> reviewer rather than at the decision record. This section is the full DDL and the
+> reasoning behind each column.
+
+
 ```sql
 CREATE TYPE doc_type            AS ENUM ('order_form','purchase_order');
 CREATE TYPE customer_resolution AS ENUM ('matched','ambiguous','unmatched','manual');
