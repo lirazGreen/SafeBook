@@ -1,0 +1,59 @@
+{
+  "file": "ACME Order From.pdf",
+  "_note": "Hand-read from the PDF. Dates are ISO as stored; the API renders mm-dd-yyyy.",
+  "_escalates": ["paymentTermsDays", "specialTerms"],
+  "_escalatesWhy": {
+    "paymentTermsDays": "stated only as prose: 'Payment shall be made within thirty (30) days from invoice'. The 'Payment Terms:' label EXISTS and its text does not parse as Net xx, which is what makes this a failed rule rather than a missing field.",
+    "specialTerms": "numbered prose with no labels at all — nothing in the document says 'Burst' or 'Technical Account Manager', so the labelled-bullet parse returns [] and the section escalates."
+  },
+  "document": {
+    "docType": "order_form",
+    "customerSlug": "acme",
+    "startDate": "2025-01-01",
+    "endDate": "2026-12-31",
+    "amount": "152500",
+    "currency": "USD",
+    "paymentTermsDays": 30,
+    "billingFrequency": "Annual"
+  },
+  "parties": {
+    "buyer": {
+      "name": "Appsoft Inc.",
+      "address": "123 Main Street, New York, NY, USA",
+      "signaturePresent": true,
+      "signerName": "Bob Lee",
+      "signerTitle": "CEO",
+      "signatureDate": "2025-01-02"
+    },
+    "vendor": {
+      "name": "Acme",
+      "_addressNote": "null is the CORRECT answer — Acme's document states no vendor address anywhere. Scoring it as a miss would make the ceiling unreachable.",
+      "address": null,
+      "signaturePresent": true,
+      "signerName": "John Smith",
+      "signerTitle": "CFO",
+      "signatureDate": "2024-12-13"
+    }
+  },
+  "typeDetails": {
+    "quote_number": "Q-20702",
+    "quote_date": "2025-05-12",
+    "quote_expiration_date": "2025-07-01",
+    "proposed_by": null,
+    "subscription_term_months": null,
+    "po_required": null,
+    "po_number": null,
+    "po_amount": null
+  },
+  "items": [
+    { "productName": "SaaS Subscription", "itemStartDate": "2025-01-01", "itemEndDate": "2025-12-31", "quantity": "1",   "unitPrice": "50000", "totalAmount": "50000", "currency": "USD" },
+    { "productName": "SaaS Subscription", "itemStartDate": "2026-01-01", "itemEndDate": "2026-12-31", "quantity": "1",   "unitPrice": "60000", "totalAmount": "60000", "currency": "USD" },
+    { "productName": "Premium Support",   "itemStartDate": "2025-01-01", "itemEndDate": "2025-12-31", "quantity": "100", "unitPrice": "250",   "totalAmount": "25000", "currency": "USD" },
+    { "productName": "Premium Support",   "itemStartDate": "2026-01-01", "itemEndDate": "2026-12-31", "quantity": "50",  "unitPrice": "250",   "totalAmount": "12500", "currency": "USD" },
+    { "productName": "Training Package",  "itemStartDate": "2025-01-01", "itemEndDate": "2026-12-31", "quantity": "50",  "unitPrice": "100",   "totalAmount": "5000",  "currency": "USD" }
+  ],
+  "specialTerms": [
+    { "termType": "burst", "percent": "5" },
+    { "termType": "technical_account_manager", "percent": null }
+  ]
+}

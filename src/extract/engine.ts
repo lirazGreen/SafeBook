@@ -25,7 +25,28 @@ export interface FieldOutcome<T> {
 export type Escalator = (
   field: string,
   sections: string[],
-) => Promise<{ value: unknown; quote: string } | null>;
+) => Promise<unknown>;
+
+/**
+ * Narrows an escalator answer to the scalar `{ value, quote }` shape.
+ *
+ * The escalator returns `unknown` on purpose. The live path validates against a
+ * zod schema inside the SDK call, but the FIXTURE path reads JSON off disk and
+ * the special-terms schema returns `{ terms: [...] }` rather than a scalar — so
+ * the transport cannot promise one shape and the use site has to check. A
+ * hand-edited or stale fixture used to flow straight into the pipeline
+ * unvalidated.
+ *
+ * A null quote returns null here, which is also a bug fix: the schemas allow
+ * `{ value: null, quote: null, not_found_reason }` — the explicit "not stated"
+ * the prompts ask for — and that used to reach resolveEvidence() as a null.
+ */
+export function asQuoted(answer: unknown): { value: unknown; quote: string } | null {
+  if (answer === null || typeof answer !== "object") return null;
+  const a = answer as Record<string, unknown>;
+  if (typeof a["quote"] !== "string") return null;
+  return { value: a["value"], quote: a["quote"] };
+}
 
 export interface ExtractFieldArgs<T> {
   field: string;
@@ -72,8 +93,10 @@ export async function extractField<T>(args: ExtractFieldArgs<T>): Promise<FieldO
   if (escalate === null) {
     return { value: null, source: null, reviewReason: 'FIELD_NOT_FOUND' };
   }
-  const answer = await escalate(field, sections);
+  const answer = asQuoted(await escalate(field, sections));
   if (answer === null) {
+    // Covers both a refusal and the explicit `{ value: null, quote: null }` the
+    // prompts ask for in preference to a guess.
     return { value: null, source: null, reviewReason: 'FIELD_NOT_FOUND' };
   }
 

@@ -82,7 +82,22 @@ export function buildEscalator(opts: BuildEscalatorOptions): Escalator | null {
     const key = fixtureKey(field, env.LLM_MODEL, instruction, input);
 
     const cached = await readFixture(key);
-    if (cached !== null) return cached.response as { value: unknown; quote: string };
+    if (cached !== null) {
+      // Validated rather than trusted. The LIVE path is schema-checked inside the
+      // SDK call, but a fixture is JSON off disk — a hand-edited or stale one used
+      // to flow straight into the pipeline. A malformed fixture is a hard error for
+      // the same reason a missing one is: silence here would be indistinguishable
+      // from a model that answered.
+      const parsed = SCHEMAS[field].safeParse(cached.response);
+      if (!parsed.success) {
+        throw new Error(
+          `LLM fixture ${key} for field "${field}" does not match its schema:\n` +
+            parsed.error.issues.map((i) => `  ${i.path.join(".") || "(root)"}: ${i.message}`).join("\n") +
+            `\n  Re-record with: LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy`,
+        );
+      }
+      return parsed.data;
+    }
     if (env.LLM_MODE === 'fixture') throw new FixtureMissError(key, field, input);
 
     opts.onCall?.();
@@ -117,6 +132,6 @@ export function buildEscalator(opts: BuildEscalatorOptions): Escalator | null {
         response: parsed,
       });
     }
-    return parsed as { value: unknown; quote: string };
+    return parsed;
   };
 }

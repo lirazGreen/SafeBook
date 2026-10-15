@@ -18,7 +18,9 @@ import { maskSections, keepOnlySection } from './strategies/sections.ts';
 import { coerce, type ValueType } from './normalize/coerce.ts';
 import { readTwoColumnSignature } from './strategies/twoColumnSignature.ts';
 import { dateEnvelope, validate, type ReviewReason } from './validate.ts';
-import type { Escalator, FieldSource } from './engine.ts';
+import { asQuoted, type Escalator, type FieldSource } from './engine.ts';
+import { SpecialTermsOutput } from '../llm/schemas.ts';
+import { evidenceResolver } from '../llm/evidence.ts';
 
 export interface PartyRecord {
   role: 'buyer' | 'vendor';
@@ -75,7 +77,14 @@ export interface ExtractionResult {
   reviewReasons: ReviewReason[];
   reviewNotes: string[];
   fieldTrace: Record<string, FieldTrace>;
+  /**
+   * API calls ACTUALLY made. Zero in fixture mode even for a document that
+   * escalates, which is the point — so it cannot be read as "did this document
+   * need the model". That question is `escalations`.
+   */
   llmCalls: number;
+  /** Fields whose deterministic rule failed and which therefore reached the escalator. */
+  escalations: string[];
 }
 
 export interface PipelineInput {
@@ -86,11 +95,31 @@ export interface PipelineInput {
   /** Resolves (customerId, docType) -> the active merged definition. */
   resolveProfile: (customerId: number | null, docType: DocType) =>
     Promise<{ profileId: number; definition: ProfileDefinition } | null>;
-  /** null in phase 2: escalation then records FIELD_NOT_FOUND instead of calling. */
-  escalate: Escalator | null;
+  /**
+   * Builds the escalator ONCE THE PROFILE IS KNOWN, which is why this is a
+   * factory rather than an Escalator.
+   *
+   * The profile is resolved inside this function, and the escalator needs it:
+   * Acme never writes the phrase "Technical Account Manager", so its
+   * `special_terms.synonyms` have to reach the prompt. Passing a ready-made
+   * escalator from the caller — which is what ingest.ts did — meant those
+   * synonyms were silently never applied and `withSynonyms` was dead code.
+   *
+   * null runs deterministic-only: a failed rule is flagged FIELD_NOT_FOUND
+   * rather than erroring, which is how the service behaves with no API key.
+   */
+  escalate: EscalatorFactory | null;
   docTypeOverride?: DocType | undefined;
   customerIdOverride?: number | undefined;
 }
+
+/** Built per document, after the profile resolves. See PipelineInput.escalate. */
+export type EscalatorFactory = (opts: {
+  rawText: string;
+  synonyms?: Record<string, string[]> | undefined;
+  docType: DocType;
+  onCall?: (() => void) | undefined;
+}) => Escalator | null;
 
 const str = (v: { text: string } | null) => v?.text ?? null;
 
@@ -143,7 +172,7 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
       paymentTermsDays: null, billingFrequency: null, attributes: {},
       parties: [], typeDetails: {}, items: [], specialTerms: [],
       reviewReasons, reviewNotes: ['document type could not be determined'],
-      fieldTrace: trace, llmCalls: 0,
+      fieldTrace: trace, llmCalls: 0, escalations: [],
     };
   }
   const resolved =
@@ -151,6 +180,23 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     (await input.resolveProfile(null, docType));
   if (resolved === null) throw new Error(`NO_ACTIVE_PROFILE for doc_type=${docType}`);
   const def = resolved.definition;
+
+  // Built HERE, not by the caller: it needs this document's text to slice
+  // sections from AND this profile's synonyms. onCall counts real API calls, so
+  // a replayed fixture reports zero.
+  let llmCalls = 0;
+  const escalations: string[] = [];
+  // Whitespace- and typography-normalised, with an index map back to the
+  // original: a naive rawText.indexOf(quote) FALSELY REJECTS correct answers,
+  // because Acme's payment clause is laid out across two lines and both order
+  // forms use curly quotes where a model returns ASCII.
+  const evidence = evidenceResolver(rawText);
+  const escalate = input.escalate === null ? null : input.escalate({
+    rawText,
+    synonyms: def.special_terms?.synonyms,
+    docType,
+    onCall: () => { llmCalls++; },
+  });
 
   // ---- 3b. the text a lookup is allowed to see
   //
@@ -216,22 +262,33 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
 
   const termsRaw = find(field('payment_terms'));
   let paymentTermsDays = termsRaw ? parseNetTerms(termsRaw.text) : null;
-  let llmCalls = 0;
+  const byRule = paymentTermsDays !== null;
   if (paymentTermsDays === null) {
-    // the deterministic rule failed -> escalate. In phase 2 there is no
-    // escalator, so this records FIELD_NOT_FOUND rather than calling anything.
-    if (input.escalate !== null) {
-      const answer = await input.escalate('payment_terms_days', field('payment_terms')?.sections ?? []);
-      llmCalls++;
+    // The deterministic rule failed -> escalate. Both POs state `Net 30`/`Net 45`
+    // literally and never get here; both order forms state it only as prose.
+    if (escalate !== null) {
+      escalations.push('payment_terms_days');
+      const answer = asQuoted(await escalate('payment_terms_days', field('payment_terms')?.sections ?? []));
       if (answer !== null && typeof answer.value === 'number') paymentTermsDays = answer.value;
     }
     if (paymentTermsDays === null) reviewReasons.push('FIELD_NOT_FOUND');
   }
-  record('payment_terms_days', paymentTermsDays, paymentTermsDays === null ? null : (termsRaw && parseNetTerms(termsRaw.text) !== null ? 'rule' : 'llm'), termsRaw);
+  record('payment_terms_days', paymentTermsDays,
+    paymentTermsDays === null ? null : byRule ? 'rule' : 'llm', termsRaw);
 
+  // The instructive field: Acme writes `Billing Frequency: Annual` as a plain
+  // label and parses, while CloudShield states it only in prose ("Payment will be
+  // made annually"). Same field, same profile, one parses and one escalates —
+  // decided by the document.
   const freqRaw = find(field('billing_frequency'));
-  const billingFrequency = str(freqRaw);
-  record('billing_frequency', billingFrequency, billingFrequency ? 'rule' : null, freqRaw);
+  let billingFrequency = str(freqRaw);
+  if (billingFrequency === null && escalate !== null) {
+    escalations.push('billing_frequency');
+    const answer = asQuoted(await escalate('billing_frequency', field('billing_frequency')?.sections ?? []));
+    if (answer !== null && typeof answer.value === 'string') billingFrequency = answer.value;
+  }
+  record('billing_frequency', billingFrequency,
+    billingFrequency === null ? null : freqRaw !== null ? 'rule' : 'llm', freqRaw);
 
   // ---- 5. parties
   //
@@ -393,10 +450,42 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
       pageNo: null,
     };
   });
-  if (specialTerms.length === 0 && input.escalate !== null) {
-    // order forms number their terms without labels, so the bullet parse finds
-    // nothing and this escalates. Phase 6 wires the escalator.
-    llmCalls++;
+  // Order forms NUMBER their terms without labelling them — nothing in Acme's
+  // document says "Burst" or "Technical Account Manager" — so the bullet parse
+  // returns [] and the whole section escalates. Both POs label theirs, so
+  // neither gets here.
+  if (specialTerms.length === 0 && escalate !== null) {
+    escalations.push('special_terms');
+    const answer = await escalate('special_terms', [def.special_terms?.section ?? 'Special Terms']);
+    const parsed = SpecialTermsOutput.safeParse(answer);
+    if (parsed.success) {
+      for (const t of parsed.data.terms) {
+        // Same rule as every other escalated value: the quote must exist in the
+        // document, or the term is dropped rather than stored unverifiable.
+        const at = evidence.resolve(t.quote);
+        if (at === null) {
+          reviewReasons.push('LLM_EVIDENCE_MISMATCH');
+          continue;
+        }
+        specialTerms.push({
+          termType: t.term_type,
+          ordinal: t.ordinal,
+          // decimal STRINGS, so 38.89 reaches NUMERIC without float error
+          percent: t.percent === null ? null : String(t.percent),
+          capValue: t.cap_value === null ? null : String(t.cap_value),
+          capUnit: t.cap_unit,
+          period: t.period,
+          appliesTo: t.applies_to,
+          // the quote IS the term text: `term_text` is the source of truth and
+          // the parsed columns are a projection of it
+          // the document's OWN characters at the resolved offsets, not the
+          // model's rendering of them — curly quotes and line breaks included
+          termText: at.text,
+          attributes: {},
+          pageNo: null,
+        });
+      }
+    }
   }
 
   // ---- 9. dates from the item envelope when the document states none
@@ -446,5 +535,6 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     reviewNotes: v.notes,
     fieldTrace: trace,
     llmCalls,
+    escalations,
   };
 }

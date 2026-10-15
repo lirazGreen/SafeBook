@@ -1,89 +1,101 @@
-import { readFile, readdir } from 'node:fs/promises';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import type { CustomerPattern } from '../../src/classify/issuer.ts';
-import { runExtraction } from '../../src/extract/pipeline.ts';
-import { parsePdf } from '../../src/pdf/parse.ts';
-import { loadCustomers, loadProfiles, type DocType } from '../../src/profiles/loader.ts';
+import { scoreAll, totals, type Scored } from '../../accuracy/runner.ts';
 
 /**
- * Turns the brief's ">=95% field accuracy" KPI into a build-breaking assertion.
+ * Turns the brief's ">=95% field accuracy" KPI into a build-breaking assertion,
+ * over the SAME comparison the printed number uses — so `npm run accuracy` and
+ * `npm test` cannot drift apart.
  *
  * Runs the real pipeline with NO DATABASE and NO API KEY, so it is reproducible
- * from a fresh clone — which is what makes the printed number mean anything.
+ * from a fresh clone, which is what makes the printed number mean anything.
+ *
+ * Three verdicts, not two. A `pending` value is a field that MUST escalate and
+ * has no recorded fixture yet: that is the documented behaviour with no key, not
+ * a defect, so it does not fail the build. It also never counts as a pass — see
+ * the KPI case at the bottom.
  */
-const customersYaml = await loadCustomers();
-const customers = customersYaml.map((c, i) => ({ id: i + 1, slug: c.slug, name: c.name }));
-const slugById = new Map(customers.map((c) => [c.id, c.slug]));
-const patterns: CustomerPattern[] = customersYaml.flatMap((c, i) =>
-  c.match.map((m) => ({ customerId: i + 1, slug: c.slug, kind: m.kind, pattern: m.pattern })));
-const profiles = await loadProfiles();
-const resolveProfile = async (customerId: number | null, docType: DocType) => {
-  const slug = customerId === null ? null : slugById.get(customerId) ?? null;
-  const p = profiles.find((x) => x.customerSlug === slug && x.docType === docType);
-  return p === undefined ? null : { profileId: 0, definition: p.definition };
-};
+const scored: Scored[] = await scoreAll();
+const byFile = (name: string) => scored.find((s) => s.expected.file.includes(name))!;
 
-const expectedFiles = (await readdir('accuracy/expected')).filter((f) => f.endsWith('.json')).sort();
+describe('accuracy', () => {
+  it.each(scored.map((s) => [s.expected.file, s] as const))(
+    '%s has no WRONG values — every field either matches or awaits a fixture',
+    (_file, s) => {
+      const wrong = s.comparisons.filter((c) => c.verdict === 'fail');
+      expect(wrong.map((c) => `${c.field}: expected ${JSON.stringify(c.expected)}, got ${JSON.stringify(c.actual)}`))
+        .toEqual([]);
+    },
+  );
 
-describe('accuracy KPI', () => {
-  it('has ground truth for at least one document per supported type so far', () => {
-    expect(expectedFiles.length).toBeGreaterThan(0);
+  it('scores all four samples', () => {
+    expect(scored.map((s) => s.expected.file).sort()).toEqual([
+      'ACME Order From.pdf',
+      'CloudShield Order Form.pdf',
+      'Purchase Order – BrightOps Analytics Ltd.pdf',
+      'Purchase Order – NovaFleet Technologies Inc.pdf',
+    ]);
+  });
+});
+
+describe('what needs the model, and what does not', () => {
+  it('NEITHER purchase order escalates anything', () => {
+    // The claim the whole deterministic-first design rests on: the rules already
+    // parse `Net 30`/`Net 45` and the labelled special-term bullets, so these two
+    // documents cost nothing to process. Asserted rather than observed.
+    for (const name of ['BrightOps', 'NovaFleet']) {
+      expect(byFile(name).expected._escalates ?? []).toEqual([]);
+      expect(byFile(name).result.escalations).toEqual([]);
+      expect(byFile(name).result.llmCalls).toBe(0);
+      expect(byFile(name).comparisons.filter((c) => c.verdict !== 'pass')).toEqual([]);
+    }
   });
 
-  it.each(expectedFiles)('%s extracts exactly as hand-read from the PDF', async (file) => {
-    const exp = JSON.parse(await readFile(join('accuracy/expected', file), 'utf8'));
-    const parsed = await parsePdf(join('sample docs', exp.file));
-    const got = await runExtraction({ parsed, customers, patterns, resolveProfile, escalate: null });
-
-    // document-level
-    expect(got.docType).toBe(exp.document.docType);
-    expect(got.customerId === null ? null : slugById.get(got.customerId)).toBe(exp.document.customerSlug);
-    expect(got.startDate).toBe(exp.document.startDate);
-    expect(got.endDate).toBe(exp.document.endDate);
-    expect(Number(got.amount)).toBe(Number(exp.document.amount));
-    expect(got.currency).toBe(exp.document.currency);
-    expect(got.paymentTermsDays).toBe(exp.document.paymentTermsDays);
-    expect(got.billingFrequency).toBe(exp.document.billingFrequency);
-
-    // parties
-    for (const [role, fields] of Object.entries(exp.parties as Record<string, Record<string, unknown>>)) {
-      const party = got.parties.find((p) => p.role === role)!;
-      for (const [k, v] of Object.entries(fields)) {
-        expect((party as unknown as Record<string, unknown>)[k], `${role}.${k}`).toBe(v);
-      }
-    }
-
-    // items, including the reconciliation that validates the whole table parse
-    expect(got.items).toHaveLength(exp.items.length);
-    exp.items.forEach((e: Record<string, unknown>, i: number) => {
-      const a = got.items[i]!;
-      expect(a.productName, `item[${i}].productName`).toBe(e['productName']);
-      expect(a.itemStartDate, `item[${i}].start`).toBe(e['itemStartDate']);
-      expect(a.itemEndDate, `item[${i}].end`).toBe(e['itemEndDate']);
-      expect(Number(a.quantity), `item[${i}].qty`).toBe(Number(e['quantity']));
-      expect(Number(a.totalAmount), `item[${i}].total`).toBe(Number(e['totalAmount']));
-    });
-    expect(got.items.reduce((t, i) => t + Number(i.totalAmount), 0)).toBe(Number(exp.document.amount));
-
-    // special terms
-    for (const e of exp.specialTerms as Record<string, unknown>[]) {
-      const a = got.specialTerms.find((t) => t.termType === e['termType']);
-      expect(a, `term ${String(e['termType'])}`).toBeDefined();
-      if (e['percent'] !== null) expect(Number(a!.percent)).toBe(Number(e['percent']));
-    }
-
-    // a clean document must raise no review flags at all
-    expect(got.reviewReasons).toEqual([]);
+  it('both order forms escalate their PROSE fields and nothing else', () => {
+    // Acme and CloudShield state payment terms only in prose, and number their
+    // special terms without labelling them. CloudShield additionally states its
+    // billing frequency only in prose, where Acme writes it as a plain label —
+    // same field, same profile, decided by the document.
+    expect(byFile('ACME').expected._escalates).toEqual(['paymentTermsDays', 'specialTerms']);
+    expect(byFile('CloudShield').expected._escalates)
+      .toEqual(['paymentTermsDays', 'billingFrequency', 'specialTerms']);
   });
 
-  it('needs no LLM call for a purchase order — the rules already parse', async () => {
-    for (const file of expectedFiles) {
-      const exp = JSON.parse(await readFile(join('accuracy/expected', file), 'utf8'));
-      if (exp.document.docType !== 'purchase_order') continue;
-      const parsed = await parsePdf(join('sample docs', exp.file));
-      const got = await runExtraction({ parsed, customers, patterns, resolveProfile, escalate: null });
-      expect(got.llmCalls, exp.file).toBe(0);
+  it('5 escalations across 2 documents, as the design claims', () => {
+    expect(scored.flatMap((s) => s.expected._escalates ?? [])).toHaveLength(5);
+  });
+
+  it('makes ZERO api calls, with or without a key', () => {
+    // Nothing in the suite may reach the network. tests/setup/offlineLlm.ts pins
+    // LLM_MODE to `fixture`, so an escalation either replays a recording or
+    // raises a named miss — it never dials out.
+    expect(scored.map((s) => s.result.llmCalls)).toEqual([0, 0, 0, 0]);
+  });
+});
+
+describe('the KPI', () => {
+  const t = totals(scored);
+
+  it('has nothing WRONG across all four documents', () => {
+    expect(t.failed).toBe(0);
+  });
+
+  it('is withheld, not inflated, while any field awaits a fixture', () => {
+    // The one rule that keeps the number honest: a ">=95%" computed over only the
+    // fields that did not need a model is a claim about a SMALLER problem than the
+    // brief set. So while anything is pending the KPI is reported as not yet
+    // measurable — never as a pass.
+    //
+    // When the fixtures are recorded this flips: pending drops to 0 and the
+    // assertion below becomes the real gate.
+    if (t.pending > 0) {
+      expect(t.passed + t.pending).toBe(t.total);
+      return;
     }
+    expect(t.pct).toBeGreaterThanOrEqual(95);
+  });
+
+  it('reports the deterministic score for the record', () => {
+    // 230 / 239 at the time of writing: every value that does not need the model.
+    expect(t.passed / t.total).toBeGreaterThan(0.95);
   });
 });

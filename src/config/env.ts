@@ -1,7 +1,20 @@
 import { z } from 'zod';
 
 const Env = z.object({
-  DATABASE_URL: z.string().url(),
+  /**
+   * OPTIONAL here, required by whoever opens a pool.
+   *
+   * The accuracy harness and the test suite are deliberately runnable with no
+   * database — profiles and customers come from YAML — but they DO need the LLM
+   * settings below, and those live in the same env object. Demanding a
+   * DATABASE_URL just to read LLM_MODE would have made `npm run accuracy`
+   * require Docker, which is the one property that makes its printed number
+   * reproducible from a fresh clone.
+   *
+   * It still fails at BOOT for the api and worker, because both open the pool
+   * at startup — see db/pool.ts, which names the fix.
+   */
+  DATABASE_URL: z.string().url().optional(),
   PORT: z.coerce.number().int().positive().default(3000),
 
   INBOX_DIR: z.string().default('./inbox'),

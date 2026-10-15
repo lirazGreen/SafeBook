@@ -60,6 +60,10 @@ export async function listFixtures(): Promise<(Fixture & { key: string })[]> {
  * would hide prompt drift behind passing tests.
  */
 export class FixtureMissError extends Error {
+  /** Exposed so the accuracy harness can REPORT the gap, not just print it. */
+  readonly field: string;
+  readonly key: string;
+
   constructor(key: string, field: string, input: string) {
     super(
       `No LLM fixture for field "${field}" (key ${key}).\n` +
@@ -67,5 +71,7 @@ export class FixtureMissError extends Error {
         `  Re-record with: LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy`,
     );
     this.name = 'FixtureMissError';
+    this.field = field;
+    this.key = key;
   }
 }

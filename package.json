@@ -13,7 +13,8 @@
     "api": "tsx watch src/entrypoints/api.ts",
     "worker": "tsx watch src/entrypoints/worker.ts",
     "test": "vitest run",
-    "accuracy": "tsx accuracy/score.ts"
+    "accuracy": "tsx accuracy/score.ts",
+    "accuracy:record": "LLM_MODE=record tsx accuracy/score.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",

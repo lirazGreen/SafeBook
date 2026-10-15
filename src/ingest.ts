@@ -8,6 +8,7 @@ import { parsePdf } from './pdf/parse.ts';
 import { loadCustomers, type DocType } from './profiles/loader.ts';
 import type { ProfileDefinition } from './profiles/schema.ts';
 import { buildEscalator } from './llm/client.ts';
+import { env } from './config/env.ts';
 import { sha256, storage } from './storage/index.ts';
 
 const PDF_MAGIC = '%PDF-';
@@ -89,17 +90,17 @@ export async function ingestFile(
     return { profileId: row.id, definition: row.definition };
   };
 
-  // Built per document, because the escalator needs this document's text to
-  // slice sections from and to resolve evidence against. Returns null when
-  // LLM_MODE=off, in which case a failed rule is flagged rather than escalated.
-  const escalate = buildEscalator({ rawText: parsed.rawText });
-
   const result = await runExtraction({
     parsed,
     customers: customerRows,
     patterns,
     resolveProfile,
-    escalate,
+    // Passed as a FACTORY, because the escalator needs the resolved profile as
+    // well as this document's text — Acme's TAM synonyms live in its profile and
+    // have to reach the prompt. Building it here instead meant they never did.
+    // Returns null when LLM_MODE=off, so a failed rule is flagged rather than
+    // escalated.
+    escalate: buildEscalator,
   });
 
   const persisted = await persistExtraction({
@@ -107,7 +108,9 @@ export async function ingestFile(
     result,
     profileId: usedProfileId,
     trigger: 'ingest',
-    engine: { pdf: 'pdfjs-dist@4.10', llm: escalate === null ? null : 'claude' },
+    // Records what actually ran: the model id when a call was made, null when
+    // the document needed no escalation or none was available.
+    engine: { pdf: 'pdfjs-dist@4.10', llm: result.llmCalls > 0 ? env.LLM_MODEL : null },
   });
 
   return { documentId, status: 'created', extractionStatus: persisted.status, runId: persisted.runId };

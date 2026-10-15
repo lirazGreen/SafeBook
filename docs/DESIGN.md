@@ -91,7 +91,7 @@ contains only the brief and `sample docs/`. No git repo yet.
 | LLM in tests | `vi.fn()` mocks for plumbing, **recorded fixtures for the accuracy number** — a mock there would score the pipeline against our own invented Claude output. A setup file **refuses** `live`/`record` under Vitest, so offline is enforced, not merely true |
 | Model | **`claude-opus-5`**, id in config. No `temperature`/`budget_tokens` (both 400 on this model); depth via `output_config.effort` |
 | **When the LLM runs** | **Deterministic-first, escalate on failure.** Never declared per customer — a field tries its rule, and reaches Claude only if that yields nothing or fails to parse. Two of the four samples never escalate |
-| LLM calls | At most one per escalating section. The item table never escalates |
+| LLM calls | At most one per escalating section. The item table never escalates. `llmCalls` counts calls ACTUALLY made (zero on a fixture replay); `escalations` is the separate question of what needed the model |
 | LLM output | `client.messages.parse()` + `zodOutputFormat`; model returns `quote`, **we** resolve offsets via `indexOf` |
 | UI | **None.** Brief asks for repo + README; a read-only HTML page is a stretch goal, not a phase |
 | Upload | `POST /documents` multipart, 1..N files, per-file results (`202`/`207`); duplicate sha256 → `200`, no job |
@@ -1354,15 +1354,27 @@ no longer exists. A prompt edit therefore misses and must be re-recorded.
 A miss is an **error**, never a silent fallthrough — which would either turn an offline run into
 a billed one, or hide prompt drift behind passing tests.
 
-### No fixtures exist yet, and that is correct
+### No fixtures are recorded yet, and the repo says so out loud
 
-`accuracy/expected/` holds only the two POs, and **neither escalates** — so `npm test` and
-`npm run accuracy` pass in `fixture` mode with an empty fixture directory. Writing hand-made
-fixtures now would mean guessing Claude's output for documents not yet in scope. They get
-recorded in phase 6, when Acme enters the scored set.
+The four order-form prose fields and CloudShield's billing frequency — **nine scored values
+across two documents** — need one recording run with an API key. There is none in this
+environment, so rather than hide that:
 
-A test asserts the directory is empty; if it ever fails, a PO has started escalating, which is a
-finding rather than something to paper over with a fixture.
+- `npm run accuracy` lists each pending value by name, prints the fixture key it would need, and
+  reports the KPI as **NOT YET MEASURABLE** rather than as a pass over the remaining fields.
+- `npm test` stays green, because a missing fixture is a state of the repo, not a defect in the
+  extractor. It asserts **zero wrong values**, which is the part that is actually knowable today.
+
+**Hand-writing the fixtures was the tempting shortcut and is the wrong move.** It would mean
+inventing Claude's output for the five hardest fields in the set and then scoring the pipeline
+against my own invention — the printed number would describe my imagination, not the system. A
+fixture has to be a frozen *real* response or it proves nothing. (CloudShield's burst paragraph
+makes this concrete: ~190 words carrying 38.89%, 28.21%, 19.05%, a 280,000-unit cap, **and** a
+`$275,000` figure that is not the cap. "First percentage" and "first money value" both give wrong
+answers, so whether a model gets it right is genuinely unknown until one is asked.)
+
+A test asserts the fixture directory is empty. When it stops being empty that assertion is the
+thing to delete; while it holds, it guarantees no hand-made fixture has crept in.
 
 ### Mocks and fixtures do different jobs — and neither can call Claude
 
@@ -1548,7 +1560,8 @@ src/
                             · sha256 dedupe → enqueue
   api/{server.ts,routes/*}  Express + express-openapi-validator + swagger-ui-express
 openapi.yaml                hand-written spec: served at /docs, enforced at runtime
-accuracy/{expected/*.json,score.ts}
+accuracy/{expected/*.json,compare.ts,runner.ts,score.ts}   <- one comparison, shared by
+                            npm run accuracy AND tests/accuracy/kpi.test.ts
 tests/{unit,integration,accuracy}/ + tests/fixtures/llm/*.json
 config/{fields,profiles}/
 docker-compose.yml  .env.example  .nvmrc  README.md
@@ -1962,25 +1975,41 @@ Hand-checked from the four PDFs; `accuracy/expected/*.json`. **All four reconcil
 | burst | 5% on SaaS Subscription | 38.89 / 28.21 / 19.05%, cap 280,000 units | 10% | 15% |
 | TAM | present (synonym, 2 roles) | **null** | present | present |
 
-Scored values: 4 × 10 document fields (40) + 19 items × 6 columns (114) + ~20 special-term
-assertions (burst percent and scope per burst row, TAM presence per document) ≈ **174;
-≥95% allows ≤8 wrong.** `npm run accuracy` prints the per-field and overall score.
+**239 scored values across the four documents** — 48 per purchase order, 65 for Acme, 78 for
+CloudShield — covering the document fields, both parties, the type-specific details, every item
+column and each special term. `npm run accuracy` prints the per-field and overall score.
 
+Nine of those 239 are the prose fields awaiting a recorded fixture. The other **230 are all
+correct**. ≥95% of 239 allows 11 wrong; there are currently 0 wrong and 9 unmeasurable.
 ## The accuracy harness (phase 3)
 
 `npm run accuracy` scores the real pipeline against hand-read ground truth and prints a number.
 
 ```
+ACME Order From.pdf
+  62/65 (95.4%)  escalated: none  api calls: 0  review: FIELD_NOT_FOUND
+  … paymentTermsDays  (declared as escalating; awaiting a fixture)
+  … term[0].burst  (declared as escalating; awaiting a fixture)
+  … term[1].technical_account_manager  (declared as escalating; awaiting a fixture)
+
 Purchase Order – BrightOps Analytics Ltd.pdf
-  48/48 (100.0%)  llm calls: 0  review: (none)
+  48/48 (100.0%)  escalated: none  api calls: 0  review: (none)
+
+CloudShield Order Form.pdf
+  72/78 (92.3%)  escalated: none  api calls: 0  review: FIELD_NOT_FOUND
+  … paymentTermsDays · billingFrequency · term[0..2].burst · term[3].tam (absent)
 
 Purchase Order – NovaFleet Technologies Inc.pdf
-  48/48 (100.0%)  llm calls: 0  review: (none)
+  48/48 (100.0%)  escalated: none  api calls: 0  review: (none)
 
-================================================================
-  96 / 96 scored values  =  100.0%
-  KPI is >=95%: PASS  (allows 4 wrong, 0 wrong)
-================================================================
+======================================================================
+  230 / 239 scored values  =  96.2%
+  9 pending — fields that must escalate, with no fixture recorded yet
+
+  KPI is >=95%: NOT YET MEASURABLE.
+  Record the fixtures once, with a key, then this number is final:
+      LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy
+======================================================================
 ```
 
 **It runs with no database and no API key.** Profiles and customers load from YAML, and the
@@ -1988,25 +2017,78 @@ import graph never touches `db/pool.ts` — verified by stopping Postgres and ru
 That is what makes the printed number mean something: whoever reviews this repo can reproduce it
 from a fresh clone with `npm install && npm run accuracy`.
 
+That property is also why **`DATABASE_URL` is optional in the env schema** while `db/pool.ts`
+demands it. Phase 7 made the harness build the real escalator, which reaches `config/env.ts`,
+which until then insisted on a `DATABASE_URL` just to read `LLM_MODE` — and would therefore have
+made `npm run accuracy` require Docker. The api and worker still fail at boot, because importing
+`db/pool.ts` *is* opening a pool, so the check lives there and names the fix.
+
 **Why it exists at phase 3 rather than at the end.** It is a *tool*, not a deliverable. The
 original plan had it at phase 9, which would have meant building seven phases blind — every
-change a judgement call rather than a measurement. Moved to phase 3, it guards every subsequent
-phase: when Acme's `long_month` parser lands in phase 5, this says immediately whether it broke
-the POs.
+change a judgement call rather than a measurement.
 
-**Scored values** are the document fields, both parties' fields, the type-specific details,
-every item column, and each special term — 48 per purchase order. Two deliberate choices:
+### Three verdicts, not two — and the KPI is withheld rather than inflated
+
+The harness has to separate two very different reasons a value is missing, and getting this
+wrong in either direction would make the headline number dishonest:
+
+| verdict | meaning |
+|---|---|
+| **pass** | matches the hand-read ground truth |
+| **fail** | the extractor is wrong. Breaks the build |
+| **pending** | the field *must* escalate and no fixture is recorded yet |
+
+A `pending` value is **not** a miss: `LLM_MODE=off` with no API key is the documented graceful
+degradation, and counting it as a parser failure would blame the extractor for an absent key. But
+it is emphatically **not a pass** either, and the rule that keeps this honest is:
+
+> **While anything is pending, the KPI is reported as NOT YET MEASURABLE — never as a PASS.**
+
+Because a "≥95%" computed over only the fields that did not need a model is a claim about a
+*smaller problem than the brief set*. The prose fields — payment terms, Burst, TAM — are
+precisely the ones the hybrid design exists for. Quietly excluding them and printing a green
+number would be the same mistake as mocking the accuracy run.
+
+What it does report is the deterministic score, labelled as such: **230 / 239 = 96.2%, with
+0 wrong**. Every value that does not need the model is correct on all four documents.
+
+**`_escalates` is declared in each expected file, and is self-checking.** It names the fields
+whose deterministic rule cannot succeed on that document. Declared rather than derived for two
+reasons: it documents the design's central claim — *5 escalations across 2 documents, 2 documents
+need zero calls* — somewhere a reviewer can check it, and it is what lets the harness tell "no
+fixture yet" from "the parser is wrong". A field listed there that the rule *did* answer is
+scored as a **failure**, because otherwise a stale comment would exclude a field from the KPI
+forever.
+
+**A fixture miss stays loud.** In `fixture` mode an escalation with no recording raises
+`FixtureMissError` by design — a silent fallthrough would either turn an offline run into a
+billed one or hide prompt drift behind passing tests. The harness catches it at the document
+level, prints the field and the key to record, and then re-scores that document deterministically
+so its other 62 values are still measured. Named and reported is not the same as silent.
+
+**Scored values** are the document fields, both parties' fields, the type-specific details, every
+item column, and each special term — 48 per purchase order, 65 for Acme, 78 for CloudShield.
+Four deliberate choices:
 
 - **A correctly-extracted `null` counts as a PASS.** A PO's vendor never signs, so
-  `vendor.signaturePresent: null` is the right answer; scoring it as a miss would make the
-  ceiling unreachable.
+  `vendor.signaturePresent: null` is the right answer, and Acme's document states no vendor
+  address anywhere. Scoring those as misses would make the ceiling unreachable.
 - **Money compares numerically**, so `"72000"` and `"72000.00"` are equal — the DB returns
   NUMERIC with its scale, and the harness should test the value rather than the formatting.
+- **Special terms are matched by `(termType, percent)` and consumed**, because CloudShield's one
+  burst paragraph yields three rows with different percentages. Matching by type alone would let
+  one correct row satisfy all three expectations.
+- **`absent: true` asserts a type is NOT present** — CloudShield genuinely has no Technical
+  Account Manager term, which is why the column must be nullable. It is only scored once the
+  section has actually been extracted: with no escalator the list is empty and every absence
+  would pass for free. That free pass was real, and this is what closes it.
+- Keys beginning with `_` are notes for whoever reads the file, not values to score.
 
-`tests/accuracy/kpi.test.ts` additionally asserts the per-field expectations and
-`reviewReasons == []`, so the KPI breaks the build rather than only printing badly. It also
-asserts `llmCalls === 0` for every purchase order, which keeps the "the rules already parse"
-claim honest rather than incidental.
+`tests/accuracy/kpi.test.ts` runs the **same comparison** through the same
+`accuracy/runner.ts`, so the printed number and the build-breaking assertion cannot drift apart.
+It asserts zero `fail` verdicts on all four documents, that neither PO escalates anything, that
+`llmCalls === 0` everywhere (nothing in the suite may reach the network), and that the five
+declared escalations are exactly the prose fields.
 
 ## Profile keys: declared, applied, or deleted
 
@@ -2320,20 +2402,80 @@ closing case asserts the only unanswered field on either document is the **prose
 Both POs still score **48/48** and make **zero** LLM calls, so none of this leaked into the
 documents that were already passing.
 
-### Phase 7 — add the order forms to the scored set
+### Phase 7 — the order forms in the scored set ✅ (fixtures pending a key)
 
-Every deterministic field on both order forms now extracts, so what remains is the **scoring**
-and the **escalating** half: `accuracy/expected/acme.json` and `cloudshield.json`, then recording
-the five real fixtures (both payment terms, CloudShield's billing frequency, both special-term
-sections) so the printed number comes from recorded model output rather than a mock.
+Both order forms are now scored, and **every deterministic value on all four documents is
+correct: 230 / 239, 0 wrong.** The nine outstanding values are the prose fields, which need one
+recording run with an API key — see the harness section for why the KPI is withheld rather than
+printed as a pass until then.
 
-One correction to make here rather than earlier: `npm run accuracy` runs under `tsx`, not
-Vitest, so it inherits the `off` default instead of `fixture`. Harmless while only the POs are
-scored — neither escalates — and load-bearing the moment an order form enters the set, because
-`off` would flag `FIELD_NOT_FOUND` instead of replaying a fixture and the number would drop with
-nothing naming the cause.
+```
+LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy    # or: npm run accuracy:record
+```
 
-**Exit: all four documents at ≥95%.**
+Writing the ground truth was the easy half. Three things in the escalation path turned out to be
+wired incorrectly, and none of them would have shown up before an order form was scored.
+
+#### 1. Special terms never escalated — the code counted a call it never made
+
+```ts
+if (specialTerms.length === 0 && input.escalate !== null) {
+  llmCalls++;                     // ...and that was all
+}
+```
+
+So no order form ever got special terms, **and** `llmCalls` was a count of *intentions* rather
+than calls — which made it unfalsifiable. Both are fixed: the escalator is actually called, its
+list is mapped onto `special_terms` rows, and `llmCalls` now comes from the client's `onCall`
+hook so a replayed fixture correctly reports **zero**. The question "did this document need the
+model?" is a separate field, `escalations`.
+
+That split matters for the design's own claim. `llmCalls === 0` for a purchase order used to be
+the evidence that *the rules already parse*; once fixtures exist it would be 0 for Acme too. The
+honest assertion is `escalations === []`, and the KPI test now makes both.
+
+#### 2. The escalator was built by the caller, so per-customer synonyms never reached it
+
+`ingest.ts` built it from the document text alone:
+
+```ts
+const escalate = buildEscalator({ rawText: parsed.rawText });
+```
+
+But the escalator needs the **profile**, and the profile resolves *inside* `runExtraction`.
+Acme never writes the phrase "Technical Account Manager" — it names a *"Customer Support Manager
+and Product Architect"* — so its `special_terms.synonyms` have to reach the prompt, and
+`withSynonyms` was dead code. `PipelineInput.escalate` is now a **factory** called once the
+profile is known; `ingest.ts` passes `buildEscalator` itself. Six of the eight call sites
+(`escalate: null`) needed no change at all.
+
+#### 3. A legitimate model response could crash the pipeline
+
+Every schema permits `{ value: null, quote: null, not_found_reason }` — the explicit "not
+stated" the prompts *ask for* in preference to a guess — and that null `quote` went straight into
+`resolveEvidence(quote: string)`. Narrowing through `asQuoted()` turns it into a clean
+`FIELD_NOT_FOUND`, which is the right outcome.
+
+The same change made the escalator return `unknown` rather than a claimed `{ value, quote }`,
+because the transport genuinely cannot promise one shape: `special_terms` returns
+`{ terms: [...] }`, and the **fixture path reads JSON off disk**. So fixtures are now validated
+against their schema on replay. A hand-edited or stale fixture used to flow into the pipeline
+unchecked — and a malformed one is a hard error for the same reason a missing one is: silence
+would be indistinguishable from a model that answered.
+
+#### Evidence verification applies to special terms too
+
+Each returned term's quote must resolve in `raw_text` or the term is **dropped** and
+`LLM_EVIDENCE_MISMATCH` flagged — an unverifiable value is treated as no value, never as data.
+Two properties of that worth stating, both covered by tests against the real documents:
+
+- It matches **across a line break**. Acme's burst clause wraps mid-sentence
+  (`"Customer shall have\nthe right to utilize up to 5% more…"`), and a naive `indexOf` would
+  reject the correct answer.
+- `term_text` stores **the document's own characters**, not the model's rendering — Acme uses
+  curly quotes around `(the "Burst Threshold")` where a model returns ASCII. `term_text` is the
+  source of truth and the parsed columns are a projection of it, so it has to be what the page
+  actually says.
 
 ### Phase 8 — operational layer
 

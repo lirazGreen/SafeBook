@@ -1,0 +1,70 @@
+{
+  "file": "CloudShield Order Form.pdf",
+  "_note": "Hand-read from the PDF. Dates are ISO as stored; the API renders mm-dd-yyyy.",
+  "_escalates": ["paymentTermsDays", "billingFrequency", "specialTerms"],
+  "_escalatesWhy": {
+    "paymentTermsDays": "prose: 'Payment will be made within forty-five (45) days of Customer's receipt of an invoice'.",
+    "billingFrequency": "the instructive one. Acme writes 'Billing Frequency: Annual' as a plain label and parses; CloudShield states it only in prose ('Payment will be made annually'). SAME field, SAME profile, one parses and one escalates — decided by the document, not by configuration.",
+    "specialTerms": "eight numbered paragraphs with no labels. Burst is the hardest field in the whole set: one ~190-word paragraph carries three different percentages AND a $275,000 figure that is not the cap."
+  },
+  "document": {
+    "docType": "order_form",
+    "customerSlug": "cloudshield",
+    "startDate": "2025-03-01",
+    "endDate": "2028-02-28",
+    "amount": "23640000.00",
+    "currency": "USD",
+    "paymentTermsDays": 45,
+    "billingFrequency": "Annual"
+  },
+  "parties": {
+    "buyer": {
+      "name": "TechNova Solutions, Inc.",
+      "address": "2500 Tech Park Boulevard, Austin, Texas 78701",
+      "shippingAddress": "2500 Tech Park Boulevard, Austin, Texas 78701",
+      "contactName": "Sarah Thompson",
+      "contactEmail": "billing@technova.com",
+      "contactPhone": "+1 (512) 555-8900",
+      "_signatureNote": "FALSE, not null: the two-column block exists and both columns are blank underscores. 'Could not tell' and 'it is unsigned' are different answers.",
+      "signaturePresent": false,
+      "signerName": null,
+      "signerTitle": null,
+      "signatureDate": null
+    },
+    "vendor": {
+      "name": "CloudShield Security, Inc.",
+      "_addressNote": "stated once, inside the legal preamble — no label exists, hence the profile pattern.",
+      "address": "500 Innovation Drive, San Jose, CA 95134",
+      "signaturePresent": false,
+      "signerName": null,
+      "signerTitle": null,
+      "signatureDate": null
+    }
+  },
+  "typeDetails": {
+    "quote_number": "Q-78291",
+    "quote_date": "2025-01-20",
+    "quote_expiration_date": "2025-01-27",
+    "proposed_by": "Michael Chen",
+    "subscription_term_months": "36.00",
+    "po_required": false,
+    "po_number": null,
+    "po_amount": "USD 0.00"
+  },
+  "items": [
+    { "productName": "CloudShield Enterprise", "itemStartDate": "2025-03-01", "itemEndDate": "2026-02-28", "quantity": "180000", "unitPrice": "3.25",     "totalAmount": "7020000.00", "currency": "USD" },
+    { "productName": "Premium Support",        "itemStartDate": "2025-03-01", "itemEndDate": "2026-02-28", "quantity": "1",      "unitPrice": "22916.67", "totalAmount": "275000.00",  "currency": "USD" },
+    { "productName": "CloudShield Enterprise", "itemStartDate": "2026-03-01", "itemEndDate": "2027-02-28", "quantity": "195000", "unitPrice": "3.25",     "totalAmount": "7605000.00", "currency": "USD" },
+    { "productName": "Premium Support",        "itemStartDate": "2026-03-01", "itemEndDate": "2027-02-28", "quantity": "1",      "unitPrice": "22916.67", "totalAmount": "275000.00",  "currency": "USD" },
+    { "productName": "CloudShield Enterprise", "itemStartDate": "2027-03-01", "itemEndDate": "2028-02-28", "quantity": "210000", "unitPrice": "3.25",     "totalAmount": "8190000.00", "currency": "USD" },
+    { "productName": "Premium Support",        "itemStartDate": "2027-03-01", "itemEndDate": "2028-02-28", "quantity": "1",      "unitPrice": "22916.67", "totalAmount": "275000.00",  "currency": "USD" }
+  ],
+  "_specialTermsNote": "Scored against the brief's two required special terms only. CloudShield's document carries eight numbered paragraphs; the other six (free trial, tiered pricing, conversion right, renewal cap, renewal commit, credit, SLA) are captured and stored, but their term_type vocabulary is a classification judgement rather than hand-readable ground truth, so scoring them would be scoring my guess at the model's wording. Burst is three ITEM-SCOPED rows, one per subscription year.",
+  "specialTerms": [
+    { "termType": "burst", "percent": "38.89" },
+    { "termType": "burst", "percent": "28.21" },
+    { "termType": "burst", "percent": "19.05" },
+    { "_absentNote": "CloudShield genuinely has NO technical account manager term. An explicit absence, not a miss — which is why the column must be nullable.",
+      "termType": "technical_account_manager", "absent": true }
+  ]
+}
