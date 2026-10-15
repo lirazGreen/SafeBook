@@ -26,6 +26,19 @@ const Env = z.object({
   INBOX_DIR: z.string().default('./inbox'),
   ARCHIVE_DIR: z.string().default('./archive'),
   FAILED_DIR: z.string().default('./failed'),
+  PROCESSED_DIR: z.string().default('./processed'),
+  /**
+   * Move a file out of the inbox once it has been registered.
+   *
+   * ON by default, and not merely tidiness: without it the inbox grows without
+   * bound and every poll tick re-reads and re-hashes every file in it. The
+   * assigner explicitly allowed moving completed files to an archive folder.
+   *
+   * Worth being able to turn OFF, because the inbox may be a shared cloud drive
+   * the customer also uses, where silently relocating their files is unwelcome.
+   * With it off, the stat cache is what stops the re-hashing instead.
+   */
+  MOVE_PROCESSED: z.enum(['true', 'false']).default('true').transform((v) => v === 'true'),
 
   // The assigner confirmed there are no file-arrival alerts, so the worker polls.
   POLL_INTERVAL_MS: z.coerce.number().int().min(250).default(2000),

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { env } from '../config/env.ts';
 import { isKnown, registerBytes } from '../ingest/register.ts';
-import { sha256 } from '../storage/index.ts';
+import { failedDir, moveOutOfInbox, processedDir, sha256 } from '../storage/index.ts';
 
 /**
  * One sweep of the inbox.
@@ -27,18 +27,35 @@ export interface ScanSummary {
   /** Still being written or synced — skipped, and retried next tick. */
   unstable: number;
   rejected: number;
+  /** Relocated out of the inbox, so a later tick does not re-read them. */
+  moved: number;
+  /** Settled on an earlier tick and not re-read. See the `done` flag below. */
+  skipped: number;
 }
 
 interface Seen {
   size: number;
   mtimeMs: number;
+  /**
+   * Already registered (or rejected) on an earlier tick.
+   *
+   * This is what makes the stat cache do what it was always documented to do.
+   * Before it, every tick re-READ and re-HASHED every file still in the inbox
+   * just to discover it was a duplicate — the cache only gated *stability*. With
+   * MOVE_PROCESSED on, files leave the inbox and the question rarely arises; with
+   * it off, or when a move fails, this is the only thing preventing the inbox
+   * being re-hashed every couple of seconds forever.
+   */
+  done?: boolean;
 }
 
 /**
  * `path -> (size, mtime)` from the previous tick.
  *
- * Also what keeps steady state cheap: a file whose size and mtime are unchanged
- * needs only a `stat()`, so the archive is not re-hashed every interval.
+ * Also what keeps steady state cheap — though only since the `done` flag: before
+ * it, this cache gated STABILITY only, and a file still sitting in the inbox was
+ * re-read and re-hashed on every single tick just to rediscover it was a
+ * duplicate. The comment claimed otherwise for three phases.
  */
 const seen = new Map<string, Seen>();
 
@@ -85,12 +102,26 @@ function isStable(path: string, s: Seen, now: number): boolean {
 }
 
 /**
- * @param dir overrides the configured inbox. A test seam: `env` is read at import
- *   time, so a test cannot point INBOX_DIR somewhere else after the fact, and an
- *   end-to-end test must not sweep the real folder it shares with the worker.
+ * Overrides for the configured directories and the move behaviour.
+ *
+ * A test seam, for the same reason `dir` is one: `env` is read at import time,
+ * so a test cannot point these somewhere else after the fact — and a test must
+ * not sweep, or relocate files in, the real folders it shares with a worker.
  */
-export async function scanInbox(dir: string = env.INBOX_DIR): Promise<ScanSummary> {
-  const summary: ScanSummary = { found: 0, enqueued: 0, duplicate: 0, unstable: 0, rejected: 0 };
+export interface ScanOptions {
+  processedDir?: string;
+  failedDir?: string;
+  move?: boolean;
+}
+
+export async function scanInbox(
+  dir: string = env.INBOX_DIR,
+  options: ScanOptions = {},
+): Promise<ScanSummary> {
+  const shouldMove = options.move ?? env.MOVE_PROCESSED;
+  const summary: ScanSummary = {
+    found: 0, enqueued: 0, duplicate: 0, unstable: 0, rejected: 0, moved: 0, skipped: 0,
+  };
   const files = await pdfsUnder(dir);
   const now = Date.now();
   const alive = new Set<string>();
@@ -107,6 +138,14 @@ export async function scanInbox(dir: string = env.INBOX_DIR): Promise<ScanSummar
     const current: Seen = { size: info.size, mtimeMs: info.mtimeMs };
     alive.add(path);
 
+    const previous = seen.get(path);
+    if (previous?.done === true && previous.size === current.size && previous.mtimeMs === current.mtimeMs) {
+      // Settled on an earlier tick and untouched since: no read, no hash, no
+      // query. See Seen.done for why this had to exist.
+      summary.skipped++;
+      continue;
+    }
+
     if (!isStable(path, current, now)) {
       seen.set(path, current);
       summary.unstable++;
@@ -114,17 +153,19 @@ export async function scanInbox(dir: string = env.INBOX_DIR): Promise<ScanSummar
     }
     seen.set(path, current);
 
+    let destination: string | null = null;
     try {
       const bytes = await readFile(path);
       // Hash first and skip early: a re-dropped file costs one read, no
       // transaction and no second extraction.
       if (await isKnown(sha256(bytes))) {
         summary.duplicate++;
-        continue;
+      } else {
+        const result = await registerBytes(bytes, relative(dir, path), 'poll');
+        if (result.duplicate) summary.duplicate++;
+        else summary.enqueued++;
       }
-      const result = await registerBytes(bytes, relative(dir, path), 'poll');
-      if (result.duplicate) summary.duplicate++;
-      else summary.enqueued++;
+      destination = options.processedDir ?? processedDir();
     } catch (err) {
       // One bad file must not abort the sweep. A rejection is counted and
       // reported; the job queue is where retryable failures live, and a file
@@ -134,6 +175,28 @@ export async function scanInbox(dir: string = env.INBOX_DIR): Promise<ScanSummar
         stage: 'scan', file: relative(dir, path),
         error: err instanceof Error ? err.message : String(err),
       }));
+      // A scan-stage rejection is PERMANENT — not a PDF, or over the size cap.
+      // Leaving it in place would re-read and re-reject it on every tick
+      // forever, so it goes to failed/ where a human can find it.
+      destination = options.failedDir ?? failedDir();
+    }
+
+    // Settled either way. Remember that, so the branch at the top of the loop
+    // can skip it even if the move below cannot happen.
+    seen.set(path, { ...current, done: true });
+
+    if (shouldMove) {
+      const outcome = await moveOutOfInbox(path, destination);
+      if (outcome.moved) {
+        summary.moved++;
+        seen.delete(path);          // it is gone from the inbox; stop tracking it
+      } else {
+        // Not fatal. The document row is committed and the bytes are archived,
+        // so a failed move costs one cache entry, not data.
+        console.error(JSON.stringify({
+          stage: 'scan', file: relative(dir, path), moved: false, error: outcome.error,
+        }));
+      }
     }
   }
 

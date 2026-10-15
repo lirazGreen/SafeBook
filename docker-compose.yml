@@ -43,6 +43,8 @@ services:
       - ./openapi.yaml:/app/openapi.yaml
       - ./inbox:/app/inbox
       - ./archive:/app/archive
+      - ./processed:/app/processed
+      - ./failed:/app/failed
       - ./failed:/app/failed
 
 volumes:

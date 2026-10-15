@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -42,6 +43,14 @@ const maybe = available ? it : it.skip;
 const NONCE = `${process.pid}-${Date.now()}`;
 const created: number[] = [];
 let inbox: string | null = null;
+let processed: string | null = null;
+
+/** A sample made content-unique but parse-identical, as bytes. */
+const taggedSample = (name: string, tag: string) =>
+  Buffer.concat([
+    readFileSync(join('sample docs', name)),
+    Buffer.from(`\n% safebook-test-${NONCE}-${tag}\n`),
+  ]);
 
 /** Copies a sample in, made content-unique but parse-identical. */
 async function drop(sample: string, as: string): Promise<void> {
@@ -60,6 +69,7 @@ afterAll(async () => {
     .query(`DELETE FROM documents WHERE original_filename = 'half-written.pdf'`)
     .catch(() => {});
   if (inbox !== null) await rm(inbox, { recursive: true, force: true });
+  if (processed !== null) await rm(processed, { recursive: true, force: true });
   await pool.end().catch(() => {});
 });
 
@@ -114,6 +124,7 @@ async function documentIdFor(sample: string): Promise<number> {
 describe('folder -> queue -> database', () => {
   maybe('ingests every PDF dropped in the folder, and extracts each one', async () => {
     inbox = await mkdtemp(join(tmpdir(), 'safebook-inbox-'));
+    processed = await mkdtemp(join(tmpdir(), 'safebook-processed-'));
     resetStabilityCache();
 
     // A nested path on purpose: the sweep is recursive, so folder nesting can
@@ -125,10 +136,10 @@ describe('folder -> queue -> database', () => {
 
     // TWO sweeps. The first sees files with no previous tick to compare against
     // and holds them back; the second releases them.
-    const first = await scanInbox(inbox);
+    const first = await scanInbox(inbox, { processedDir: processed as string });
     expect(first).toMatchObject({ found: 4, enqueued: 0, unstable: 4 });
-    const second = await scanInbox(inbox);
-    expect(second).toMatchObject({ found: 4, enqueued: 4, unstable: 0, duplicate: 0, rejected: 0 });
+    const second = await scanInbox(inbox, { processedDir: processed as string });
+    expect(second).toMatchObject({ found: 4, enqueued: 4, unstable: 0, duplicate: 0, moved: 4 });
 
     // Collect the ids BEFORE settling, so the assertions do not depend on who
     // ran the jobs.
@@ -177,11 +188,16 @@ describe('folder -> queue -> database', () => {
     // Content-addressed, so this holds under a DIFFERENT filename: the same bytes
     // arriving twice is one document and one extraction, not two rounds of LLM
     // calls.
+    // NOTE the counts: the first test's four files have already been MOVED out
+    // of the inbox, so only this copy is found. That is the behaviour change --
+    // previously every processed file stayed and was re-hashed on every tick.
     await drop('ACME Order From.pdf', 'renamed-by-someone-else.pdf');
-    await scanInbox(inbox as string);
-    const summary = await scanInbox(inbox as string);
+    await scanInbox(inbox as string, { processedDir: processed as string });
+    const summary = await scanInbox(inbox as string, { processedDir: processed as string });
 
-    expect(summary).toMatchObject({ found: 5, enqueued: 0, duplicate: 5 });
+    // Content-addressed, so the SAME BYTES under a different filename is one
+    // document and no second job -- which is the point of the test.
+    expect(summary).toMatchObject({ found: 1, enqueued: 0, duplicate: 1 });
     expect(await claim()).toBeNull();
   }, 30_000);
 
@@ -200,11 +216,13 @@ describe('folder -> queue -> database', () => {
     // instead of `enqueued` — which is how this assertion first failed.
     await writeFile(partial, Buffer.from(`%PDF-1.7\nnot finished yet ${NONCE}`));
 
-    const first = await scanInbox(inbox as string);
-    expect(first.unstable).toBe(1);        // only the new file; the rest are known stable
+    // move: false, because this test is about the STABILITY GATE and needs the
+    // file to stay where it is so its mtime can be compared afterwards.
+    const first = await scanInbox(inbox as string, { move: false });
+    expect(first.unstable).toBe(1);        // only the new file; the rest are gone
 
     const before = await stat(partial);
-    const second = await scanInbox(inbox as string);
+    const second = await scanInbox(inbox as string, { move: false });
     // Unchanged since the previous tick, so now eligible — and ACCEPTED by the
     // scan, whose only content check is the `%PDF-` magic bytes, which a
     // truncated file still has. The scan stays cheap on purpose; judging the
@@ -227,5 +245,119 @@ describe('folder -> queue -> database', () => {
       code: 'PDF_CORRUPT', errorClass: 'permanent', willRetry: false,
     });
     expect((await getJob(job.id))!['status']).toBe('failed');
+  }, 30_000);
+});
+
+describe('the inbox does not grow, and is not re-read forever', () => {
+  maybe('moves a registered file OUT of the inbox, keeping its name', async () => {
+    // storage.ingest() existed from phase 1 and NOTHING CALLED IT, so processed
+    // files stayed in the inbox indefinitely. The consequence was not just an
+    // untidy folder: every tick re-read and re-hashed every file in it.
+    resetStabilityCache();
+    const box = await mkdtemp(join(tmpdir(), 'safebook-move-'));
+    const done = await mkdtemp(join(tmpdir(), 'safebook-done-'));
+    try {
+      await writeFile(join(box, 'Fresh Order.pdf'), taggedSample('ACME Order From.pdf', 'move'));
+
+      await scanInbox(box);                       // held back: no previous tick
+      const second = await scanInbox(box, { processedDir: done });
+      expect(second).toMatchObject({ enqueued: 1, moved: 1 });
+
+      // gone from the inbox, present in the destination UNDER ITS OWN NAME --
+      // the archive is content-addressed, which is useless to a human
+      expect(await readdir(box)).toEqual([]);
+      expect(await readdir(done)).toEqual(['Fresh Order.pdf']);
+
+      // and a later tick has nothing to do at all
+      expect(await scanInbox(box, { processedDir: done }))
+        .toMatchObject({ found: 0, enqueued: 0, duplicate: 0, moved: 0 });
+    } finally {
+      await rm(box, { recursive: true, force: true });
+      await rm(done, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  maybe('does not clobber a same-named file already in the destination', async () => {
+    // Two customers can both send `Order Form.pdf`.
+    resetStabilityCache();
+    const box = await mkdtemp(join(tmpdir(), 'safebook-clash-'));
+    const done = await mkdtemp(join(tmpdir(), 'safebook-clash-done-'));
+    try {
+      await writeFile(join(done, 'Order Form.pdf'), Buffer.from('an earlier, different file'));
+      await writeFile(join(box, 'Order Form.pdf'), taggedSample('CloudShield Order Form.pdf', 'clash'));
+
+      await scanInbox(box, { processedDir: done });
+      await scanInbox(box, { processedDir: done });
+
+      const landed = (await readdir(done)).sort();
+      expect(landed).toEqual(['Order Form.1.pdf', 'Order Form.pdf']);
+      // the pre-existing file is untouched
+      expect((await readFile(join(done, 'Order Form.pdf'))).toString()).toBe('an earlier, different file');
+    } finally {
+      await rm(box, { recursive: true, force: true });
+      await rm(done, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  maybe('sends a REJECTED file to failed/, so it is not re-rejected every tick', async () => {
+    resetStabilityCache();
+    const box = await mkdtemp(join(tmpdir(), 'safebook-bad-'));
+    const bad = await mkdtemp(join(tmpdir(), 'safebook-bad-out-'));
+    try {
+      await writeFile(join(box, 'notes.pdf'), Buffer.from('this is plainly not a pdf'));
+
+      await scanInbox(box, { failedDir: bad });
+      const second = await scanInbox(box, { failedDir: bad });
+      expect(second).toMatchObject({ rejected: 1, moved: 1 });
+
+      expect(await readdir(box)).toEqual([]);
+      expect(await readdir(bad)).toEqual(['notes.pdf']);
+    } finally {
+      await rm(box, { recursive: true, force: true });
+      await rm(bad, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  maybe('with moving DISABLED, a settled file is skipped rather than re-hashed', async () => {
+    // The inbox may be a shared drive the customer also uses, where relocating
+    // their files is unwelcome. Then the `done` flag is the only thing stopping
+    // the re-hash -- which is what the cache's comment had claimed all along.
+    resetStabilityCache();
+    const box = await mkdtemp(join(tmpdir(), 'safebook-stay-'));
+    try {
+      await writeFile(join(box, 'Stays Put.pdf'), taggedSample('ACME Order From.pdf', 'stay'));
+
+      await scanInbox(box, { move: false });
+      const second = await scanInbox(box, { move: false });
+      expect(second).toMatchObject({ enqueued: 1, moved: 0 });
+
+      const third = await scanInbox(box, { move: false });
+      expect(third).toMatchObject({ found: 1, skipped: 1, duplicate: 0, enqueued: 0 });
+      // still there, untouched
+      expect(await readdir(box)).toEqual(['Stays Put.pdf']);
+    } finally {
+      await rm(box, { recursive: true, force: true });
+    }
+  }, 30_000);
+
+  maybe('a file MODIFIED after settling is reconsidered, not skipped', async () => {
+    // The skip is keyed on size+mtime, so a replaced file must come back.
+    resetStabilityCache();
+    const box = await mkdtemp(join(tmpdir(), 'safebook-mod-'));
+    try {
+      const path = join(box, 'Revised.pdf');
+      await writeFile(path, taggedSample('ACME Order From.pdf', 'v1'));
+      await scanInbox(box, { move: false });
+      await scanInbox(box, { move: false });
+      expect(await scanInbox(box, { move: false })).toMatchObject({ skipped: 1 });
+
+      // a corrected version: different bytes, so a different sha256
+      await writeFile(path, taggedSample('ACME Order From.pdf', 'v2-corrected'));
+      await scanInbox(box, { move: false });                      // mtime changed -> unstable
+      const after = await scanInbox(box, { move: false });
+      expect(after).toMatchObject({ skipped: 0, enqueued: 1 });   // a NEW document
+    } finally {
+      await rm(box, { recursive: true, force: true });
+    }
   }, 30_000);
 });

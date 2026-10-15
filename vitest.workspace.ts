@@ -1,3 +1,5 @@
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadDotEnv } from './src/config/dotenv.ts';
 import { testDatabaseUrl } from './tests/integration/setup.ts';
 
@@ -40,7 +42,20 @@ export default [
       // Set HERE rather than in globalSetup: forked workers inherit the env of
       // the process that spawns them, and relying on that ordering is the kind
       // of implicit coupling this file exists to remove.
-      ...(configured === undefined ? {} : { env: { DATABASE_URL: testDatabaseUrl(configured) } }),
+      // Point the WRITABLE directories at temp paths for the whole project.
+      //
+      // Not belt-and-braces: a test that sweeps a temp inbox but leaves the
+      // DESTINATION at its default moves files into the real ./processed, and one
+      // did — six sample PDFs ended up in the repo's own folder before this
+      // existed. Per-test overrides are for assertions; this is what makes
+      // forgetting one harmless.
+      env: {
+        ...(configured === undefined ? {} : { DATABASE_URL: testDatabaseUrl(configured) }),
+        INBOX_DIR: join(tmpdir(), 'safebook-test-inbox'),
+        PROCESSED_DIR: join(tmpdir(), 'safebook-test-processed'),
+        FAILED_DIR: join(tmpdir(), 'safebook-test-failed'),
+        ARCHIVE_DIR: join(tmpdir(), 'safebook-test-archive'),
+      },
       fileParallelism: false,
       poolOptions: { forks: { singleFork: true } },
     },

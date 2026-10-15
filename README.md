@@ -596,6 +596,44 @@ and the point of `NUMERIC` is defeated if anything parses it on the way through.
 
 ## Operations
 
+### The folders
+
+```
+inbox/        dropped here, by you or by a sync client. Swept on a timer
+processed/    moved here once registered, UNDER ITS ORIGINAL NAME
+failed/       moved here if the scan rejects it (not a PDF, over the size cap)
+archive/      content-addressed storage: <sha256>.pdf. The service reads from here
+```
+
+A file leaves `inbox/` as soon as it is registered — the assigner explicitly allowed moving
+completed files to an archive folder, and it is not merely tidiness. Leaving them there means the
+inbox grows without bound **and every poll tick re-reads and re-hashes every file in it** just to
+rediscover it is a duplicate. With moving on, a steady-state tick reports `found: 0` and does
+nothing.
+
+`processed/` keeps the **original filename** rather than the content hash, because
+`archive/<sha256>.pdf` is right for retrieval and useless to a human looking at a folder. A
+name collision appends `.1`, `.2` — two customers can both send `Order Form.pdf`, and the
+earlier file is never clobbered.
+
+A **rejected** file moves to `failed/` for the same reason: a scan-stage rejection is permanent,
+so leaving it in place would re-read and re-reject it on every tick forever.
+
+```bash
+cp "sample docs/"*.pdf inbox/
+echo "not a pdf" > inbox/broken.pdf
+# a few seconds later
+ls inbox/          # empty
+ls processed/      # the four PDFs, original names
+ls failed/         # broken.pdf
+```
+
+**Set `MOVE_PROCESSED=false` to leave files where they are.** Worth having, because the inbox may
+be a shared cloud drive the customer also uses, where silently relocating their files is
+unwelcome. With it off, a file that has already been settled is skipped on later ticks by its
+`size + mtime`, so it is still not re-hashed — and a file whose bytes change is reconsidered,
+because a corrected version is a different document.
+
 - **Polling, not a filesystem watcher.** The assigner confirmed there are no file-arrival alerts.
   A watcher would also have satisfied that, but the folder was explicitly allowed to be a shared
   cloud drive, and filesystem events are unreliable on sync-backed mounts. Polling behaves

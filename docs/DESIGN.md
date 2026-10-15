@@ -118,7 +118,7 @@ image-only scans are out of support for now. Nothing here is still open.
 |---|---|---|
 | A1 | The folder is a **local directory** | ✅ *"Feel free to use either a local directory or a shared cloud drive — whichever is easiest for you."* Local it is. `StorageAdapter` stays as a seam but S3 is not needed. Because a cloud drive was offered as equally acceptable, the trigger must not depend on filesystem events — see A2 |
 | A2 | **No arrival notification**; the service discovers files itself | ✅ *"There are no incoming file alerts, so the process will need to poll/check periodically for new arrivals."* **This changed the design:** `chokidar` is dropped in favour of an in-process polling timer (below) |
-| A3 | The service **may move** processed files to `archive/` | ✅ *"You can move completed files into an archive folder once processed."* As designed — and still not load-bearing, since the scan hash-checks rather than assuming an emptied inbox |
+| A3 | The service **may move** processed files out of `inbox/` | ✅ *"You can move completed files into an archive folder once processed."* **Implemented late:** `storage.ingest()` existed from phase 1 and nothing ever called it, so processed files stayed in the inbox indefinitely. Not load-bearing for correctness — the scan hash-checks rather than assuming an emptied inbox — but load-bearing for COST: see below |
 | A4 | PDFs always have a **text layer** | ✅ **Scoped out by decision** — image-only scans are explicitly not supported for now, and the README says so. A scan is still *detected* rather than mishandled: zero extracted text fails fast as `NO_TEXT_LAYER`, which is countable. If it ever needs supporting, the mitigation is already recorded — PDF-direct base64 input to Claude's vision, which needs no change elsewhere in the pipeline |
 | A5 | A re-uploaded identical file is a **no-op**; a corrected version has a different sha256 and becomes a new document | If supersede semantics are wanted, add `supersedes_document_id` rather than overwriting, so the earlier extraction stays auditable |
 | A6 | **Modest volume** — a single serial worker suffices | High volume → the `jobs` table already supports concurrent workers via `FOR UPDATE SKIP LOCKED`; raise the worker replica count |
@@ -347,8 +347,11 @@ jobs go unprocessed anyway.
 eligible only once its `size` and `mtime` are unchanged across two ticks (or its mtime is older
 than `STABLE_AFTER_MS`). Without it a tick catches a half-copied file — copying Acme's 191 KB
 PDF is not instantaneous — and on a cloud drive, a file that has appeared but not finished
-syncing. A `path + size + mtime` in-memory cache keeps steady-state ticks to `stat()` only, so
-the archive is never re-hashed every interval.
+syncing. A `path + size + mtime` in-memory cache keeps steady-state ticks to `stat()` only -- but
+that was NOT true as built, and said so for three phases. The cache gated *stability* and
+nothing else, so a file still sitting in the inbox was re-read and re-hashed on EVERY tick just
+to rediscover it was a duplicate. Fixed two ways: the cache now records the verdict alongside the
+stat, and settled files are moved out of the inbox entirely.
 
 `POLL_INTERVAL_MS` is short in dev (a couple of seconds, so demos feel immediate) and longer in
 production — one env var, same code.
@@ -451,6 +454,49 @@ harmless while only the POs were scored and became load-bearing the moment an or
 the set — `off` builds no escalator, so the recorded answers were never replayed and the harness
 reported 230/239 with fixtures sitting on disk. Flagged as a phase-7 risk two phases earlier, and
 this is where it bit.
+## The inbox had to actually drain
+
+Two pieces of dead code, found by being asked a direct question — *"did you check the folders,
+moving processed files to archive?"* — rather than by any test:
+
+- **`storage.ingest()`**, which does the `rename`, existed from phase 1 and **nothing ever called
+  it**. `registerBytes` used `storage.put()`, which COPIES. So the inbox never drained.
+- **`failedDir`** was exported and never referenced, so a rejected file stayed put too.
+
+The consequence was not an untidy folder. The scan reads and hashes every eligible file on every
+tick to decide whether it is already known, so with a two-second interval the service was
+re-hashing the entire inbox thirty times a minute, forever. Visible in the logs the whole time as
+`found: 4, duplicate: 4` repeating — which read as correct behaviour rather than as waste.
+
+### What it does now
+
+| | |
+|---|---|
+| registered | moved to `processed/` **under its original filename** |
+| rejected by the scan | moved to `failed/` — a scan-stage rejection is permanent, so leaving it would re-reject it every tick |
+| name already taken | `.1`, `.2`, … appended. Two customers can both send `Order Form.pdf`, and the earlier file is never clobbered |
+| `MOVE_PROCESSED=false` | nothing is moved. The inbox may be a shared drive the customer also uses |
+
+`processed/` keeps the original name deliberately: `archive/<sha256>.pdf` is right for retrieval
+and useless to a human looking at a folder.
+
+**A failed move is not fatal.** By the time it runs the document row is committed and the bytes
+are archived, so the cost is one cache entry, not data. That matters on a read-only or
+permission-restricted mount, where the service must keep working rather than stall.
+
+**And the cache now records the verdict**, not just the stat — so with moving disabled, or after a
+move that failed, a settled file is skipped rather than re-hashed. A file whose `size + mtime`
+changes is reconsidered, because a corrected version is a different document with a different
+sha256.
+
+### A test wrote into the repo's own folder
+
+Worth recording because it is the hazard of making a function relocate files: the first version of
+the folder tests swept a TEMP inbox but left the DESTINATION at its default, so six sample PDFs
+were moved into the real `./processed`. Per-test overrides fixed the symptom; the structural fix is
+in `vitest.workspace.ts`, which now pins `INBOX_DIR`, `PROCESSED_DIR`, `FAILED_DIR` and
+`ARCHIVE_DIR` to temp paths for the whole integration project — so forgetting an override is
+harmless rather than destructive.
 ## Database schema
 
 > The README has a shorter table-by-table tour of the same schema, aimed at a

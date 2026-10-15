@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
-import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { mkdir, readFile, rename, stat, unlink, writeFile } from 'node:fs/promises';
+import { basename, dirname, join, resolve } from 'node:path';
 import { env } from '../config/env.ts';
 
 /**
@@ -64,4 +64,51 @@ export class LocalFsAdapter implements StorageAdapter {
 }
 
 export const storage: StorageAdapter = new LocalFsAdapter(env.ARCHIVE_DIR);
-export const failedDir = (filename: string) => join(env.FAILED_DIR, filename);
+
+/**
+ * Moves a file out of the inbox, keeping its ORIGINAL name.
+ *
+ * The archive is content-addressed (`<sha256>.pdf`), which is right for
+ * retrieval and useless for a human looking at a folder — so the inbox copy is
+ * relocated under its own filename rather than deleted. Deleting would also be
+ * the wrong default on a drive the customer shares.
+ *
+ * Never fatal. By the time this runs the document row is committed and the bytes
+ * are archived, so a failure here costs a re-hash on the next tick, not data.
+ */
+export async function moveOutOfInbox(
+  sourcePath: string,
+  destDir: string,
+): Promise<{ moved: boolean; to?: string; error?: string }> {
+  const base = basename(sourcePath);
+  try {
+    await mkdir(destDir, { recursive: true });
+    let target = join(destDir, base);
+    // A different file with the same name must not be clobbered: two customers
+    // can both send `Order Form.pdf`.
+    for (let n = 1; n < 100; n++) {
+      try {
+        await stat(target);
+      } catch {
+        break;   // free
+      }
+      const dot = base.lastIndexOf('.');
+      target = join(destDir, dot === -1 ? `${base}.${n}` : `${base.slice(0, dot)}.${n}${base.slice(dot)}`);
+    }
+    try {
+      await rename(sourcePath, target);
+    } catch (err) {
+      // rename fails across devices — an inbox on a different mount, which a
+      // cloud drive usually is.
+      if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+      await writeFile(target, await readFile(sourcePath));
+      await unlink(sourcePath);
+    }
+    return { moved: true, to: target };
+  } catch (err) {
+    return { moved: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export const failedDir = () => env.FAILED_DIR;
+export const processedDir = () => env.PROCESSED_DIR;
