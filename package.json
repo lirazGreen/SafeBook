@@ -15,7 +15,8 @@
     "test": "vitest run",
     "accuracy": "tsx accuracy/score.ts",
     "accuracy:record": "LLM_MODE=record tsx accuracy/score.ts",
-    "lint:api": "spectral lint openapi.yaml --fail-severity=error"
+    "lint:api": "spectral lint openapi.yaml --fail-severity=error",
+    "check:llm": "tsx scripts/check-llm.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.133.0",

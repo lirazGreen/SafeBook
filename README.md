@@ -61,6 +61,49 @@ they are held back rather than read mid-copy. By the second call the polling tim
 ingested them, so they come back as `duplicate` — content-addressed, so a re-dropped file costs
 nothing.
 
+### Letting it answer the prose fields
+
+Out of the box `LLM_MODE=off`: a field whose deterministic rule fails is flagged
+`FIELD_NOT_FOUND` and the document still persists. No key needed, nothing fails. To let the
+service answer those fields instead, put a key in `.env` and switch the mode:
+
+```bash
+# .env   — gitignored, so it cannot reach the repo
+ANTHROPIC_API_KEY=sk-ant-api03-...
+LLM_MODE=live
+```
+
+```bash
+docker compose restart worker       # or just rerun npm run worker
+npm run check:llm                   # confirm it is wired, without printing the key
+```
+
+```
+LLM_MODE   live
+model      claude-opus-5
+api key    set — 108 chars, starts "sk-ant-api…"
+fixtures   0 recorded in tests/fixtures/llm/
+
+Escalations CALL the API and are BILLED (~3-6 cents each).
+```
+
+`npm run check:llm` reports length and a ten-character prefix rather than the value, because the
+obvious alternative — `echo $ANTHROPIC_API_KEY` — puts a live credential in your shell history
+and your terminal scrollback. Length and prefix are enough to distinguish "set correctly" from
+the mistakes that actually happen: set to an empty string, or pasted with a trailing newline. It
+flags surrounding whitespace explicitly.
+
+**Keys cannot be read back from Anthropic.** [console.anthropic.com](https://console.anthropic.com)
+→ Settings → API keys shows the value **once**, at creation; afterwards you can only revoke and
+create another. Note also that a Claude.ai subscription does **not** include API credits — they
+are separate balances on the same account, and a subscription with no API credit returns a 400
+that looks like a broken key but isn't.
+
+`docker compose` passes `.env` through via `env_file`, so the containers pick the key up with no
+further configuration. Locally, `src/config/dotenv.ts` loads the file, and a variable already
+present in the environment **wins** — so `LLM_MODE=record npm run accuracy` is not silently
+overridden by `.env`.
+
 ### Without Docker
 
 Two things run with **no database and no API key**, which is deliberate — it is what makes the
@@ -418,6 +461,7 @@ npm test            # 289 tests
 npm run accuracy    # the scored number
 npm run typecheck
 npm run lint:api
+npm run check:llm    # is Claude reachable, and what happens when a rule fails
 ```
 
 **No test ever calls Claude**, and that is enforced rather than assumed: a Vitest setup file
