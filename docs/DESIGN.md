@@ -2888,6 +2888,33 @@ npm run accuracy    # prints per-field + overall score vs accuracy/expected/
 npm run lint:api    # spectral lint openapi.yaml
 ```
 
+### Which of these are automated, and which are not
+
+The list below was written BEFORE the test suite existed, in the future tense — "behaviours to
+demonstrate". That reads now as if 27 things are unverified, which is not true, and the honest
+correction is more useful than ticking each line:
+
+**Most are asserted by the 317-test suite.** Content-only routing, the CloudShield
+misclassification trap, unknown-issuer handling, idempotency across both ingresses, the 207 batch
+upload, traceability with re-verified offsets, date and currency normalisation, inheritance vs
+fill-down, reconciliation on all four samples, the value-checks-warn-never-block rule, both
+evidence rejections, explicit nulls, parties, optional fields, the write-stability gate, `POST
+/scan` coalescing, and the queue's claim/retry/reclaim/release semantics all have tests.
+
+**Four are demonstrated manually, and say so**, because they need a process or a service killed
+rather than a function called:
+
+| | why it is not automated |
+|---|---|
+| *Retries — stop Postgres mid-extraction* | the CLASSIFICATION is unit-tested against real SQLSTATE codes; actually stopping Postgres mid-transaction is a manual check |
+| *Crash safety — SIGTERM mid-extraction* | tested with a deliberately slow handler, because every real job settles in ~40ms — the first attempt to race a signal had all four finish before it arrived |
+| *Missed-while-down — stop the worker, copy a PDF, restart* | the property it rests on (the sweep is driven by hashes, not events) is tested; the restart is manual |
+| *Drift, end to end* | the pieces are tested — profile versioning, reprocess-by-filter, the audit trail — but editing YAML and re-seeding is a human step by design |
+
+**Two were run against the live containerised stack** rather than asserted: four PDFs dropped in
+`inbox/` processing unattended, and the folders draining to `processed/` and `failed/`. Both are
+now also covered by integration tests against temp directories.
+
 End-to-end behaviours to demonstrate:
 - **Content-only routing** — rename `ACME Order From.pdf` to `zzz.pdf`; still classified
   `order_form` and matched to Acme via its signature block.

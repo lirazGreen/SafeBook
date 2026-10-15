@@ -713,6 +713,46 @@ Stated plainly, because a reviewer should not have to discover them.
 
 ---
 
+## What I'd do next
+
+[Limitations](#limitations) says what does not work. This says what I would fix first, and why
+that order — the gaps are not equally urgent, and two of them are disqualifiers rather than
+rough edges.
+
+**1. Authentication, before this touches anything real.** Not a hardening pass — a disqualifier.
+`GET /documents/{id}/file` serves customer contracts to anyone who can reach the port, and
+`POST /documents/reprocess` lets them re-bill the entire corpus against your API key. The
+cheapest credible version is an API key per consumer checked in middleware, declared in
+`openapi.yaml` as a security scheme so the validator enforces it; the right version is an
+authenticating gateway in front, since this is an internal service. Either way it comes first.
+
+**2. Durable storage.** `LocalFsAdapter` is the only implementation — `S3Adapter` is an interface
+and a comment. So there is no durability and no multi-instance deployment: two workers on
+different hosts would archive to different disks. The seam already exists and nothing outside
+`storage/` would change, which is exactly why it was worth building as a seam.
+
+**3. Secrets out of the repo.** `POSTGRES_PASSWORD: safebook` and the full `DATABASE_URL` are in
+`docker-compose.yml`, in git. Fine for a local demo, wrong anywhere else. The Anthropic console
+offers identity federation for this, which is the better answer than shipping a key around.
+
+**4. OCR for scanned contracts.** A real share of signed contracts arrive as images, and today
+they fail fast as `NO_TEXT_LAYER`. The mitigation needs no pipeline change — PDF-direct base64
+input to the model's vision — so this is cheaper than its position here suggests. It sits fourth
+only because the three above are correctness and security rather than coverage.
+
+**5. Timeouts, then observability.** There are no timeouts in `extract`, `pdf` or `llm`: a
+pathological PDF or a hung API call blocks the worker until the stale-lock sweep five minutes
+later. After that, metrics and alerting on the review queue and the job-failure rate — the
+structured logs are there, nothing aggregates them.
+
+**6. Retention.** `archive/` grows without bound, and these are customer contracts: a deletion
+policy is a compliance question as much as a disk one. There is also no audit of *who read which
+document* — `extraction_runs` audits extraction, not access, and Acme's own document cites GDPR.
+
+Deliberately **not** on this list: more customers or document types. Those are the things the
+design already makes cheap — a new customer is one YAML entry, and the base profiles handle an
+unfamiliar layout. Adding more would demonstrate less than the six above would fix.
+
 ## Layout
 
 ```
@@ -732,7 +772,14 @@ src/
   db/                              migrations, pool, type parsers, persistence
 config/{customers,fields,profiles} the per-customer customisation
 accuracy/                          ground truth + the shared scoring used by harness AND tests
+tests/helpers/makePdf.ts           writes minimal PDFs, so tests can use documents
+                                   from customers that do not exist
 openapi.yaml                       the contract
+spike/                             phase-0 throwaway: the scripts that verified the table
+                                   geometry against real pdfjs output BEFORE anything was
+                                   built on it. Kept because they corrected four wrong
+                                   assumptions in the design — see DESIGN.md, "What
+                                   phase 0 corrected". Not part of the service
 docs/DESIGN.md                     the full design record, including what went wrong
 ```
 
