@@ -11,6 +11,40 @@ review, never dropped.
 
 ---
 
+## If you only have five minutes
+
+**Reproduce the headline number.** No database, no API key, no `.env` — the model's answers are
+replayed from recorded fixtures, so this works offline on a fresh clone:
+
+```bash
+npm install && npm run accuracy
+#   239 / 239 scored values  =  100.0%
+#   KPI is >=95%: PASS  (allows 11 wrong, 0 wrong)
+```
+
+**Then, if you want to see it actually run** (needs Docker):
+
+```bash
+docker compose up -d
+docker compose exec api node --import=tsx src/db/migrate.ts
+docker compose exec api node --import=tsx src/profiles/seed.ts
+cp "sample docs/"*.pdf inbox/        # the worker polls; nothing else to do
+open localhost:3000/docs
+```
+
+**The three sections worth reading**, if you read nothing else:
+
+| | |
+|---|---|
+| [The model is reached, never chosen](#the-model-is-reached-never-chosen) | why no profile declares "use the LLM", and why two of the four documents cost nothing to process |
+| [Every stored value points back at document text](#every-stored-value-points-back-at-document-text) | evidence offsets, re-verified on read — the answer to "why does this row say that" |
+| [Limitations](#limitations) and [What I'd do next](#what-id-do-next) | what does not work, and the order I would fix it in. **There is no authentication** — this is not deployable as-is |
+
+`docs/DESIGN.md` is the long form: every decision, the alternative that was rejected, and the
+bugs that changed the design. It is not required reading.
+
+---
+
 ## Run it
 
 Needs Docker and Node 22 (`.nvmrc`).
