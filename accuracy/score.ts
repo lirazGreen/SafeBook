@@ -50,16 +50,29 @@ async function main() {
   if (t.pending > 0) {
     console.log(`  ${t.pending} pending — fields that must escalate, with no fixture recorded yet`);
     console.log('');
-    console.log('  KPI is >=95%: NOT YET MEASURABLE.');
-    console.log('  Record the fixtures once, with a key, then this number is final:');
-    console.log('      LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy');
-    console.log('  Reporting a PASS over only the deterministic fields would be a claim');
-    console.log('  about a smaller problem than the brief set.');
-  } else {
-    const allowed = Math.floor(t.total * 0.05);
+    // The figure above ALREADY counts every pending value against us, so report
+    // the verdict rather than withholding it. An earlier version printed only
+    // 'NOT YET MEASURABLE', which left a reader to do this arithmetic themselves
+    // — and the answer is that the bar is already cleared.
     console.log(
-      `  KPI is >=95%: ${t.pct >= 95 ? 'PASS' : 'FAIL'}` +
-        `  (allows ${allowed} wrong, ${t.total - t.passed} wrong)`,
+      `  KPI >=95%, counting every pending value as WRONG:  ` +
+        `${t.meetsKpi ? 'PASS' : 'FAIL'}  (${t.pct.toFixed(1)}%)`,
+    );
+    console.log(
+      `    needs >=${t.required} of ${t.total} passing; ${t.passed} pass, ` +
+        `${t.failed} wrong, ${t.pending} unanswered (tolerates ${t.allowed} wrong)`,
+    );
+    console.log('    This is the WORST CASE — the model gets no credit at all — and it is a');
+    console.log('    FLOOR: recording a fixture can only raise this number or leave it, never');
+    console.log('    lower it, because a pending value was never counted as passing.');
+    console.log('');
+    console.log('  Not yet EXACT. Record the fixtures once, with a key, and those');
+    console.log(`  ${t.pending} values get scored on what the model actually returns:`);
+    console.log('      LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy');
+  } else {
+    console.log(
+      `  KPI is >=95%: ${t.meetsKpi ? 'PASS' : 'FAIL'}` +
+        `  (allows ${t.allowed} wrong, ${t.total - t.passed} wrong)`,
     );
   }
   console.log('='.repeat(70));

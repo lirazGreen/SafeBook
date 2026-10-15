@@ -1366,7 +1366,8 @@ across two documents** — need one recording run with an API key. There is none
 environment, so rather than hide that:
 
 - `npm run accuracy` lists each pending value by name, prints the fixture key it would need, and
-  reports the KPI as **NOT YET MEASURABLE** rather than as a pass over the remaining fields.
+  reports the verdict on the WORST-CASE reading — every pending value counted as wrong — rather
+  than as a pass over only the remaining fields. That reading already clears ≥95%.
 - `npm test` stays green, because a missing fixture is a state of the repo, not a defect in the
   extractor. It asserts **zero wrong values**, which is the part that is actually knowable today.
 
@@ -2016,8 +2017,14 @@ Purchase Order – NovaFleet Technologies Inc.pdf
   230 / 239 scored values  =  96.2%
   9 pending — fields that must escalate, with no fixture recorded yet
 
-  KPI is >=95%: NOT YET MEASURABLE.
-  Record the fixtures once, with a key, then this number is final:
+  KPI >=95%, counting every pending value as WRONG:  PASS  (96.2%)
+    needs >=228 of 239 passing; 230 pass, 0 wrong, 9 unanswered (tolerates 11 wrong)
+    This is the WORST CASE — the model gets no credit at all — and it is a
+    FLOOR: recording a fixture can only raise this number or leave it, never
+    lower it, because a pending value was never counted as passing.
+
+  Not yet EXACT. Record the fixtures once, with a key, and those
+  9 values get scored on what the model actually returns:
       LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy
 ======================================================================
 ```
@@ -2037,7 +2044,7 @@ made `npm run accuracy` require Docker. The api and worker still fail at boot, b
 original plan had it at phase 9, which would have meant building seven phases blind — every
 change a judgement call rather than a measurement.
 
-### Three verdicts, not two — and the KPI is withheld rather than inflated
+### Three verdicts, not two — and the KPI is a floor rather than a subset
 
 The harness has to separate two very different reasons a value is missing, and getting this
 wrong in either direction would make the headline number dishonest:
@@ -2052,15 +2059,26 @@ A `pending` value is **not** a miss: `LLM_MODE=off` with no API key is the docum
 degradation, and counting it as a parser failure would blame the extractor for an absent key. But
 it is emphatically **not a pass** either, and the rule that keeps this honest is:
 
-> **While anything is pending, the KPI is reported as NOT YET MEASURABLE — never as a PASS.**
+> **Pending values count in the DENOMINATOR, never as a pass.**
 
 Because a "≥95%" computed over only the fields that did not need a model is a claim about a
 *smaller problem than the brief set*. The prose fields — payment terms, Burst, TAM — are
 precisely the ones the hybrid design exists for. Quietly excluding them and printing a green
 number would be the same mistake as mocking the accuracy run.
 
-What it does report is the deterministic score, labelled as such: **230 / 239 = 96.2%, with
-0 wrong**. Every value that does not need the model is correct on all four documents.
+What it reports instead is the verdict on that worst-case reading — and the worst case **already
+clears the bar**: **230 / 239 = 96.2%, 0 wrong**, against a threshold needing 228.
+
+**Which makes the figure a FLOOR rather than a provisional one, and that is the useful part.**
+Recording a fixture turns a pending value into a pass or a fail. A pass raises the number; a fail
+leaves it exactly where it is, because a pending value was never counted as passing. It cannot go
+down. So the printed number is a guarantee about the system, not a placeholder awaiting a key.
+
+An earlier version of the harness printed only `NOT YET MEASURABLE` and left this arithmetic to
+the reader — which was a real failure of reporting, not just of wording: the honest conclusion
+was available the whole time and the output withheld it. `tests/accuracy/kpi.test.ts` now asserts
+both halves (`meetsKpi`, and that `passed + failed + pending === total`), so the floor property
+cannot quietly stop holding.
 
 **`_escalates` is declared in each expected file, and is self-checking.** It names the fields
 whose deterministic rule cannot succeed on that document. Declared rather than derived for two
@@ -2479,7 +2497,7 @@ documents that were already passing.
 
 Both order forms are now scored, and **every deterministic value on all four documents is
 correct: 230 / 239, 0 wrong.** The nine outstanding values are the prose fields, which need one
-recording run with an API key — see the harness section for why the KPI is withheld rather than
+recording run with an API key — see the harness section for why the printed figure is a floor rather than
 printed as a pass until then.
 
 ```

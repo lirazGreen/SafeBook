@@ -79,25 +79,44 @@ npm test            # 289 tests; the 39 that need Postgres skip themselves, with
 ```
   230 / 239 scored values  =  96.2%
   9 pending — fields that must escalate, with no fixture recorded yet
+
+  KPI >=95%, counting every pending value as WRONG:  PASS  (96.2%)
+    needs >=228 of 239 passing; 230 pass, 0 wrong, 9 unanswered (tolerates 11 wrong)
 ```
 
-**Zero wrong.** Every value that can be extracted without a language model is correct on all
-four documents — document fields, both parties, type-specific details, every item column and
-every special term.
+**The brief's ≥95% is met with no API key, and nothing is wrong.** Every value that can be
+extracted without a language model is correct on all four documents — document fields, both
+parties, type-specific details, every item column and every special term.
 
-The nine outstanding values are the prose fields (payment terms on both order forms,
-CloudShield's billing frequency, and the Burst/TAM special terms). They need **one recording run
-with an API key**:
+Two things make that figure trustworthy rather than flattering:
+
+- **Pending values are counted in the denominator, never as a pass.** A "≥95%" computed over
+  only the fields that did not need a model would be a claim about a *smaller problem than the
+  brief set*, so the nine prose values count against the score even though nothing has tried to
+  answer them yet.
+- **It is therefore a floor, not a provisional figure.** Recording a fixture turns a pending
+  value into a pass or a fail; a pass raises the number, a fail leaves it exactly where it is.
+  **It cannot go down.**
+
+### What is still outstanding, and why
+
+Nine values across the two order forms: payment terms on both, CloudShield's billing frequency,
+and the Burst / TAM special terms. These are the fields stated only in prose — *"Payment shall be
+made within thirty (30) days from invoice"* — so the deterministic rule correctly fails and the
+field escalates. With no key configured, nothing answers, the value stays `NULL` and the document
+is flagged `needs_review`. That is the documented graceful degradation, not a failure.
+
+Making the number **exact** rather than a floor takes one recording run:
 
 ```bash
 LLM_MODE=record ANTHROPIC_API_KEY=... npm run accuracy   # or: npm run accuracy:record
 ```
 
-Until then the harness reports the KPI as **NOT YET MEASURABLE** rather than as a pass. That is
-a deliberate choice: a "≥95%" computed over only the fields that did not need a model is a claim
-about a *smaller problem than the brief set* — the prose fields are precisely what the hybrid
-design exists for. Hand-writing those fixtures would be worse still, because it would score the
-pipeline against an invention of what the model might say.
+Five calls, roughly 20–30 cents. The recorded responses commit as fixtures, after which
+`npm test` and `npm run accuracy` keep replaying them offline forever — which is the point: a
+fixture has to be a **frozen real response**. Hand-writing them would mean scoring the pipeline
+against a guess at what the model says, so the printed number would describe an invention rather
+than the system.
 
 Every item table reconciles exactly against its stated total, which is the check that makes the
 rest trustworthy:
@@ -425,7 +444,7 @@ Stated plainly, because a reviewer should not have to discover them.
 | | |
 |---|---|
 | **Image-only scanned PDFs are not supported.** | Detected as `NO_TEXT_LAYER` and failed fast rather than silently mis-extracted as an empty document. The mitigation needs no pipeline change — PDF-direct base64 input to the model's vision — but it is not built. |
-| **Nine prose values await one recording run with an API key.** | The deterministic 230/239 is final; the full KPI is reported as not-yet-measurable rather than inflated. See [Accuracy](#accuracy). |
+| **Nine prose values await one recording run with an API key.** | The brief's ≥95% is already met without one (230/239, 0 wrong) and that figure is a FLOOR, not a subset — but it is not yet EXACT. See [Accuracy](#accuracy). |
 | **No UI beyond Swagger.** | The brief's deliverable is a repo and a README. `/docs` renders a real file picker for the multipart upload, so the samples can be submitted from a browser and results browsed — which covers most of what a read-only page would have. |
 | **No authentication.** | Out of scope for the assignment. Every endpoint is open, and `GET /jobs/{id}` exposes a worker hostname. This is not deployable as-is. |
 | **One document type pair.** | A third type (invoice, SOW, amendment) needs a migration: a new enum value and a new field catalog. |

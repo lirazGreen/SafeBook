@@ -91,8 +91,22 @@ export interface Totals {
   failed: number;
   pending: number;
   total: number;
-  /** Percentage over the values that could be answered at all. */
+  /**
+   * passed / total, with `pending` counted in the DENOMINATOR but never as a
+   * pass. So this is the WORST CASE: it gives the model no credit at all.
+   *
+   * It is also a FLOOR rather than a provisional figure, which is the useful
+   * part. Recording a fixture turns a pending value into a pass or a fail;
+   * a pass raises this number and a fail leaves it exactly where it is, because
+   * a pending value was never counted as passing. It cannot go down.
+   */
   pct: number;
+  /** Passing values needed for >=95%. */
+  required: number;
+  /** Wrong values >=95% would tolerate. */
+  allowed: number;
+  /** Whether the floor already clears the brief's KPI. */
+  meetsKpi: boolean;
 }
 
 export function totals(scored: Scored[]): Totals {
@@ -100,8 +114,12 @@ export function totals(scored: Scored[]): Totals {
   const passed = all.filter((c) => c.verdict === 'pass').length;
   const failed = all.filter((c) => c.verdict === 'fail').length;
   const pending = all.filter((c) => c.verdict === 'pending').length;
+  const total = all.length;
+  const pct = total === 0 ? 0 : (passed / total) * 100;
   return {
-    passed, failed, pending, total: all.length,
-    pct: all.length === 0 ? 0 : (passed / all.length) * 100,
+    passed, failed, pending, total, pct,
+    required: Math.ceil(total * 0.95),
+    allowed: Math.floor(total * 0.05),
+    meetsKpi: pct >= 95,
   };
 }

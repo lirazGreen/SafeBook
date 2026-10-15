@@ -79,23 +79,31 @@ describe('the KPI', () => {
     expect(t.failed).toBe(0);
   });
 
-  it('is withheld, not inflated, while any field awaits a fixture', () => {
-    // The one rule that keeps the number honest: a ">=95%" computed over only the
-    // fields that did not need a model is a claim about a SMALLER problem than the
-    // brief set. So while anything is pending the KPI is reported as not yet
-    // measurable — never as a pass.
+  it('is met even counting EVERY pending value as wrong', () => {
+    // The brief's >=95%, on the worst-case reading: the model gets no credit at
+    // all. 230/239 = 96.2%, which needs >=228 passing.
     //
-    // When the fixtures are recorded this flips: pending drops to 0 and the
-    // assertion below becomes the real gate.
-    if (t.pending > 0) {
-      expect(t.passed + t.pending).toBe(t.total);
-      return;
-    }
+    // Worth asserting rather than leaving to a reader, because the harness used to
+    // print only 'NOT YET MEASURABLE' and left the arithmetic to them — and the
+    // answer is that the bar is already cleared without an API key.
+    expect(t.meetsKpi).toBe(true);
+    expect(t.passed).toBeGreaterThanOrEqual(t.required);
     expect(t.pct).toBeGreaterThanOrEqual(95);
   });
 
-  it('reports the deterministic score for the record', () => {
-    // 230 / 239 at the time of writing: every value that does not need the model.
-    expect(t.passed / t.total).toBeGreaterThan(0.95);
+  it('counts pending in the DENOMINATOR, so the figure is a floor and not a subset', () => {
+    // This is what makes the number honest. A '>=95%' computed over only the
+    // fields that did not need a model would be a claim about a SMALLER problem
+    // than the brief set; counting them in the denominator but never as a pass
+    // means the figure can only RISE when the fixtures are recorded — a recorded
+    // pass raises it, a recorded failure leaves it exactly where it is.
+    expect(t.passed + t.failed + t.pending).toBe(t.total);
+    expect(t.passed).toBeLessThan(t.total);          // pending are not counted as passes
+
+    // the floor property, stated arithmetically
+    const ifAllPendingPass = (t.passed + t.pending) / t.total;
+    const ifAllPendingFail = t.passed / t.total;
+    expect(ifAllPendingFail).toBe(t.pct / 100);
+    expect(ifAllPendingPass).toBeGreaterThanOrEqual(ifAllPendingFail);
   });
 });
