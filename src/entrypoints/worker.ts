@@ -15,6 +15,26 @@ import { startPollingTimer } from '../poller/loop.ts';
  * with LLM calls, which cannot run inside an HTTP handler. A queue is required
  * either way, and given one, a separate worker is nearly free.
  */
+/**
+ * `fixture` is a TESTING mode and must never run the service.
+ *
+ * A fixture key hashes the input text, so a genuinely new document can only ever
+ * MISS — and a miss is classed permanent, which fails the WHOLE document rather
+ * than just its prose field. `off` degrades gracefully; `fixture` destroys.
+ *
+ * Refused at boot rather than left to surface one document at a time, because the
+ * failure mode is both total and silent-looking: every PDF simply goes to
+ * `failed`.
+ */
+if (env.LLM_MODE === 'fixture') {
+  throw new Error(
+    'LLM_MODE="fixture" cannot run the worker: a fixture key hashes the input text, ' +
+      'so every new document misses and FAILS ENTIRELY. ' +
+      'Use LLM_MODE=live (with ANTHROPIC_API_KEY) to extract prose fields, ' +
+      'or LLM_MODE=off to flag them for review instead.',
+  );
+}
+
 console.log(JSON.stringify({
   at: new Date().toISOString(), stage: 'boot', worker: WORKER_ID,
   inbox: env.INBOX_DIR, pollIntervalMs: env.POLL_INTERVAL_MS, llmMode: env.LLM_MODE,

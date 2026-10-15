@@ -197,6 +197,16 @@ paths:
         - { name: status, in: query, schema: { $ref: '#/components/schemas/DocumentStatus' } }
         - { name: docType, in: query, schema: { $ref: '#/components/schemas/DocType' } }
         - { name: resolution, in: query, schema: { $ref: '#/components/schemas/CustomerResolution' } }
+        - name: reason
+          in: query
+          description: |
+            A single `review_reasons` code. The targeted recovery filter: a
+            document processed while no API key was configured is flagged
+            `FIELD_NOT_FOUND` and **nothing failed**, so nothing retries it — unlike
+            an API outage, which is classed transient and recovers on its own. This
+            is how those are picked up once a key is in place, without re-billing
+            every document that happens to be in review for an unrelated reason.
+          schema: { $ref: '#/components/schemas/ReviewReason' }
       responses:
         '202':
           description: Jobs enqueued.

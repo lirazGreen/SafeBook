@@ -357,11 +357,11 @@ export function mountRoutes(app: Express): void {
 
   app.post('/documents/reprocess', async (req, res) => {
     const q = req.query as Query;
-    const filters = ['customer', 'status', 'docType', 'resolution'].filter((k) => q[k] !== undefined);
+    const filters = ['customer', 'status', 'docType', 'resolution', 'reason'].filter((k) => q[k] !== undefined);
     if (filters.length === 0) {
       // An unfiltered bulk reprocess would re-bill every LLM call in the corpus.
       res.status(400).json({
-        error: 'at least one of customer, status, docType, resolution is required',
+        error: 'at least one of customer, status, docType, resolution, reason is required',
         code: 'BAD_REQUEST',
       });
       return;
@@ -373,8 +373,10 @@ export function mountRoutes(app: Express): void {
           AND ($2::text IS NULL OR d.status::text = $2)
           AND ($3::text IS NULL OR d.doc_type::text = $3)
           AND ($4::text IS NULL OR d.customer_resolution::text = $4)
+          AND ($5::text IS NULL OR $5 = ANY(d.review_reasons))
         ORDER BY d.id`,
-      [q['customer'] ?? null, q['status'] ?? null, q['docType'] ?? null, q['resolution'] ?? null],
+      [q['customer'] ?? null, q['status'] ?? null, q['docType'] ?? null, q['resolution'] ?? null,
+       q['reason'] ?? null],
     );
 
     // ONE JOB PER DOCUMENT, so each retries independently and progress is

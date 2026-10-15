@@ -104,6 +104,48 @@ further configuration. Locally, `src/config/dotenv.ts` loads the file, and a var
 present in the environment **wins** — so `LLM_MODE=record npm run accuracy` is not silently
 overridden by `.env`.
 
+### Processing documents you have never seen
+
+**You cannot know in advance whether a new document needs the model** — that is the premise the
+whole deterministic-first design rests on, and it applies to deployment too. So for real use the
+key is an operational dependency, not an optional extra:
+
+| mode | a new document |
+|---|---|
+| **`live`** + key | the correct configuration. Labelled fields come from rules at no cost; prose fields escalate and are answered |
+| **`off`** | everything the rules can reach is extracted; prose fields are `NULL` + `FIELD_NOT_FOUND` + `needs_review`. Nothing breaks |
+| **`fixture`** | **refused at boot.** A fixture key hashes the input text, so a new document can only *miss*, and a miss is classed permanent — the **whole document** fails, not just its prose field. `off` degrades; `fixture` destroys |
+
+`off` is for a reviewer cloning the repo without an API account, for CI, and for keeping the
+service *running* through a key outage or rotation. It is not a configuration for processing
+unknown documents.
+
+#### Recovering what was missed
+
+There is an asymmetry here worth knowing, because only one half self-heals:
+
+| | recovers on its own? |
+|---|---|
+| Key present, API unreachable → `LLM_UNAVAILABLE` | **yes** — classed transient, so backoff retries and the fields are recovered |
+| Key **absent** → `FIELD_NOT_FOUND` | **no** — nothing *failed*, so nothing retries. A silent partial loss |
+
+Once a key is in place, pick those up by **reason** rather than by status:
+
+```bash
+curl -X POST 'localhost:3000/documents/reprocess?reason=FIELD_NOT_FOUND'
+```
+
+`?status=needs_review` would also re-run every document in review for an unrelated reason —
+a reconciliation mismatch, an ambiguous currency — and re-bill each one.
+
+#### If other people are testing it
+
+**Do not share your key.** Each tester should use their own, or run `off`. And set a spend limit
+in the Anthropic console first: each escalating document is a few cents, but
+`POST /documents/reprocess` has **no authentication**, so anyone who can reach the port can
+re-bill the entire corpus. That is the auth gap in [Limitations](#limitations) turning into a
+cost risk rather than a theoretical one.
+
 ### Without Docker
 
 Two things run with **no database and no API key**, which is deliberate — it is what makes the

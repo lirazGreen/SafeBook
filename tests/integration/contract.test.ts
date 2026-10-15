@@ -316,4 +316,21 @@ describe('correct — routing and acknowledgement only', () => {
     expect(res.body.matched).toBeGreaterThanOrEqual(0);
     expect(res.body).toHaveProperty('jobIds');
   });
+
+  maybe('[reprocessDocuments] filters by review REASON, for targeted recovery', async () => {
+    // The case this exists for: a document processed while no API key was
+    // configured is flagged FIELD_NOT_FOUND and NOTHING FAILED, so nothing
+    // retries it — unlike an API outage, which is classed transient and recovers
+    // on its own. `?status=needs_review` would also re-run everything in review
+    // for unrelated reasons, re-billing them.
+    const res = await api().post('/documents/reprocess?reason=FIELD_NOT_FOUND').expect(202);
+    expect(res.body).toHaveProperty('matched');
+
+    // and it is a real filter, not accepted-and-ignored
+    const none = await api().post('/documents/reprocess?reason=BURST_UNATTRIBUTED').expect(202);
+    expect(none.body.matched).toBe(0);
+
+    // an unknown code is rejected by the spec rather than silently matching nothing
+    await api().post('/documents/reprocess?reason=NOT_A_REAL_CODE').expect(400);
+  });
 });
