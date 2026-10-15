@@ -63,7 +63,9 @@ describe('ignore_sections + in_section — CloudShield\'s own PO block', () => {
   it('still reads the fields that are ABOUT that block', () => {
     // The mask would otherwise delete the very data it was added to protect.
     const d = results.cloudshield!.typeDetails;
-    expect(d['po_amount']).toBe('USD 0.00');
+    // "0.00", not "USD 0.00": the column is NUMERIC(18,2), so the field declares
+    // type: money. Storing the raw string aborted the entire insert.
+    expect(d['po_amount']).toBe('0.00');
     expect(d['po_required']).toBe(false);   // "… required …? No"  -> type: boolean
   });
 

@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { withTransaction } from '../pool.ts';
+import { finish } from '../../jobs/repo.ts';
 import type { ExtractionResult } from '../../extract/pipeline.ts';
 
 /**
@@ -14,9 +15,27 @@ import type { ExtractionResult } from '../../extract/pipeline.ts';
 export interface PersistInput {
   documentId: number;
   result: ExtractionResult;
+  /**
+   * Written here rather than at ingress, because the ingress path no longer
+   * parses. FROZEN once set: evidence offsets index into it, so the trace stays
+   * verifiable. A reprocess re-parses the archived PDF and may produce better
+   * TABLES, but the text it indexes must not shift under existing offsets —
+   * hence COALESCE below, writing it only the first time.
+   */
+  rawText: string;
+  pageCount: number;
   profileId: number | null;
   trigger: string;
   engine: Record<string, unknown>;
+  /**
+   * Completed inside THIS transaction when given.
+   *
+   * That is the point of threading it down here rather than marking the job done
+   * afterwards: a crash between the two would otherwise leave either a job
+   * marked done with no data, or data with a job still `running` that the
+   * stale-lock sweep would hand to another worker to redo.
+   */
+  jobId?: number | undefined;
 }
 
 const statusFor = (r: ExtractionResult) =>
@@ -41,8 +60,12 @@ export async function persistExtraction(input: PersistInput): Promise<{ runId: n
     );
     const runId = (runRows[0] as { id: number }).id;
 
+    // raw_text and page_count are set on the FIRST extraction and then left
+    // alone. COALESCE rather than a conditional write, so the invariant is in
+    // the SQL where it cannot be forgotten by a future caller.
     await c.query(
       `UPDATE documents SET
+         raw_text = COALESCE(raw_text, $18), page_count = COALESCE(page_count, $19),
          doc_type = $2, doc_type_confidence = $3, doc_type_source = $4,
          customer_id = $5, customer_resolution = $6, detected_issuer_name = $7,
          start_date = $8, end_date = $9, amount = $10, currency = $11,
@@ -55,6 +78,7 @@ export async function persistExtraction(input: PersistInput): Promise<{ runId: n
         result.startDate, result.endDate, result.amount, result.currency,
         result.paymentTermsDays, result.billingFrequency, result.attributes,
         status, result.reviewReasons, runId,
+        input.rawText, input.pageCount,
       ],
     );
 
@@ -120,6 +144,11 @@ export async function persistExtraction(input: PersistInput): Promise<{ runId: n
         [documentId, s.termType, s.ordinal, s.percent, s.capValue, s.capUnit,
          s.period, s.appliesTo, s.termText, s.attributes, s.pageNo],
       );
+    }
+
+    // LAST, and inside the same transaction. See PersistInput.jobId.
+    if (input.jobId !== undefined) {
+      await finish(input.jobId, { runId, status, llmCalls: result.llmCalls }, c);
     }
 
     return { runId, status };

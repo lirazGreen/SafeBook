@@ -96,7 +96,10 @@ type_fields:
     in_section: "Purchase Order Information"
     type: boolean
   po_number:                { labels: ["PO Number"], in_section: "Purchase Order Information" }
-  po_amount:                { labels: ["PO Amount"], in_section: "Purchase Order Information" }
+  # type: money, because the column is NUMERIC(18,2) and the document writes
+  # "USD 0.00". Without it the raw string aborted the whole insert.
+  po_amount:                { labels: ["PO Amount"], in_section: "Purchase Order Information",
+                              type: money }
 
 items:
   column_synonyms:

@@ -2090,6 +2090,68 @@ It asserts zero `fail` verdicts on all four documents, that neither PO escalates
 `llmCalls === 0` everywhere (nothing in the suite may reach the network), and that the five
 declared escalations are exactly the prose fields.
 
+## Testing the operational layer
+
+263 unit tests plus **16 integration tests that need Postgres and skip themselves without it**,
+printing the reason rather than passing silently. `npm test` stays runnable from a fresh clone
+with no Docker — the same property the accuracy harness has.
+
+Getting the integration tests to be *reliable* rather than merely green took three attempts, and
+each failure was a real lesson rather than a flake.
+
+### The integration tests get their own database
+
+Sharing the development database failed in three ways, all of which looked like flaky tests:
+
+1. **A live worker claims the tests' jobs.** `FOR UPDATE SKIP LOCKED` is doing exactly its job —
+   two claimants are indistinguishable from two worker replicas — so the test reported 1
+   extraction where it enqueued 2. The first occurrence was a worker *I* had left running.
+2. **Worse, that worker disagrees about the answer.** It runs `LLM_MODE=off` (no key) while the
+   test runner pins `fixture`, so the same order form SUCCEEDS with `FIELD_NOT_FOUND` under one
+   and FAILS with a fixture miss under the other. Which assertion held depended on who got there
+   first.
+3. **Rows leaked between runs**, so a test's own document came back as a duplicate of itself.
+
+`vitest.workspace.ts` therefore defines two projects: the ~250 unit tests run concurrently and
+touch no database; the integration project gets `safebook_test` (created, migrated and seeded by
+its own `globalSetup`), a single fork, and no file parallelism. Verified by running the full suite
+twice **with the containerised worker live and processing** — 266 passing both times.
+
+Two smaller measures survive from the earlier attempts because they are still worth having:
+
+- **Per-run nonce.** Each sample is copied in with a nonce appended as a PDF comment after
+  `%%EOF` — changing the sha256 while leaving the document byte-identical to parse (verified:
+  same page count, same text, same runs). The test database persists between runs, so without
+  this the first run inserts the four samples and every run after it finds them already known and
+  silently tests nothing. That is exactly what happened.
+- **Cooperative settling.** The drain loops until every job reaches a terminal state rather than
+  insisting on claiming each one itself, so a concurrent worker makes no difference to the
+  outcome.
+
+### Two bugs the tests found in the code
+
+**Shutdown's release was dead code.** Writing the test showed `current` was already cleared by the
+time `stop()` could observe it — and that a handler which settles normally needs no release at
+all. The fix was the grace period described under phase 8.
+
+**`maybe()` chose `it` vs `it.skip` at collection time**, before `beforeAll` had set the
+availability flag — so every integration test skipped even with Postgres up, and the skip was
+indistinguishable from "no database". The probe moved to module scope with top-level await.
+
+### What the integration tests actually assert
+
+| | |
+|---|---|
+| `claim` | increments `attempts` AT CLAIM time; returns null rather than blocking on an empty queue |
+| partial unique indexes | the same work cannot be queued twice for one document; repeat `POST /scan` coalesces |
+| `fail` | a transient failure returns to the queue with `run_after` in the future; a **permanent** one is terminal at attempt 1 of 3 |
+| `reclaimStale` | an abandoned `running` job returns to `queued` with its lock cleared and `attempts` preserved; a FRESH lock is left alone |
+| shutdown | waits for a job that settles in time; **releases** the lock when the grace period expires; stops claiming new work; catches a handler that returns without settling |
+| folder → DB | four PDFs in a nested temp inbox become four documents routed **by content**, two fully extracted |
+| dedupe | the same bytes under a different filename is one document and no second job |
+| stability gate | a just-written file is held back on the first tick and judged on the second |
+| `PDF_CORRUPT` | a truncated PDF fails **once**, permanently |
+
 ## Profile keys: declared, applied, or deleted
 
 Tracked explicitly, because a key that silently does nothing is worse than a missing one — it
@@ -2109,6 +2171,7 @@ before implementing it does not reserve a design — it records a guess.
 | `occurrence` | ✅ new | CloudShield reuses `Customer Billing Name:` for the org **and** the contact |
 | `type` | ✅ applied | declared from the start, never read — it was storing a whole sentence into `NUMERIC(6,2)` |
 | `default_currency` | ✅ applied | already implemented in the normaliser; **Acme had no profile file at all** |
+| `type: money` | ✅ new | `po_amount` is `NUMERIC(18,2)` and the document says `USD 0.00`. The raw string aborted the whole insert — a class of bug only a real database produces |
 | `placeholder_lines` | ❌ deleted | never a strategy — `two_column_signature`'s `false` outcome |
 | `header_rows`, `wrapped_cells` | ❌ deleted | the reconstruction detects both from geometry |
 
@@ -2477,16 +2540,98 @@ Two properties of that worth stating, both covered by tests against the real doc
   source of truth and the parsed columns are a projection of it, so it has to be what the page
   actually says.
 
-### Phase 8 — operational layer
+### Phase 8 — operational layer ✅
 
 `jobs` table + `SKIP LOCKED` claim loop, error classification, backoff, stale-lock reclaim;
-polling timer + `scan_inbox` + size/mtime stability gate + sha256 dedupe; status transitions;
-single-transaction persist including `jobs.status`; graceful SIGTERM shutdown.
+polling timer + `scan_inbox` + the write-stability gate + sha256 dedupe; single-transaction
+persist including `jobs.status`; graceful SIGTERM shutdown.
 
 Deliberately late — none of it is needed to prove extraction works, and extraction is what's
 graded.
 
-**Exit:** drop four PDFs in the folder and all four process; SIGTERM mid-job and it recovers.
+**Verified end to end, in containers:** `docker compose up`, drop the four PDFs into `inbox/`,
+and all four are picked up by the polling timer and extracted with no further input. The two POs
+reach `extracted`; the two order forms reach `needs_review` because their prose payment terms
+escalate and there is no API key. `GET /documents/3` renders `03-01-2025` and `Net 30` at the
+boundary, and `/trace` re-slices `raw_text` at every recorded offset with `evidenceVerified:
+true`.
+
+#### The ingress/work split
+
+`src/ingest.ts` was one function doing both halves. It is now two, because they belong in
+different processes:
+
+| | does | runs in |
+|---|---|---|
+| `ingest/register.ts` | magic bytes, size cap, sha256, archive, `documents` row, enqueue | the scan **or** an HTTP handler |
+| `ingest/extract.ts` | re-parse the archived PDF, extract, persist | a claimed job, only |
+
+Nothing is parsed at ingress. `pdfjs-dist` parsing is CPU-bound and single-threaded so it blocks
+Node's event loop, and extraction makes network calls — neither belongs in an HTTP handler or
+inside a directory sweep.
+
+`extract.ts` re-parses from the **archive** rather than replaying stored layout, which is why
+`parsePdfBytes` exists: `StorageAdapter` is the seam for S3, and an S3 backend has no path to
+hand to `parsePdf`.
+
+#### Three invariants that needed enforcing rather than documenting
+
+**1. The job completes inside the extraction transaction.** `persistExtraction` takes a `jobId`
+and marks the job done as the last statement of the same transaction. The alternative — finish
+the job afterwards — leaves a window where a crash yields either a job marked done with no data,
+or data with a job still `running` that the stale sweep hands to another worker to redo. The doc
+comment on `persist.ts` had claimed this for two phases while `PersistInput` had no such field.
+
+**2. A handler must settle its job.** `ingest`/`reextract` do it in the transaction; the other
+two call `finish()` directly. A handler that returns with the row still `running` has left it
+locked until the five-minute stale sweep — a silent stall. The loop now checks and says so
+loudly.
+
+**3. `raw_text` is written once and then frozen.** The ingress no longer parses, so the first
+extraction writes it — via `COALESCE(raw_text, $n)`, in the SQL rather than in a conditional a
+future caller can forget. A reprocess may produce better *tables*, but the text that evidence
+offsets index into must not shift beneath them.
+
+#### Shutdown needed a deadline, not patience
+
+The first version waited indefinitely for the in-flight job and then released its lock. Writing
+a test for it showed the release was **dead code**: a handler that settles normally needs no
+release, and `current` was already cleared by the time `stop()` could observe it.
+
+The real requirement is the opposite of patience. `docker compose down` sends SIGTERM and
+SIGKILLs after about ten seconds, so waiting indefinitely does not buy the job more time — it
+just forfeits the chance to hand the lock back, and the job then waits out the five-minute stale
+sweep before anyone retries it. So `stop(graceMs = 8000)`: wait, and if the job is still running,
+release the lock and exit. It returns to the queue immediately; its `attempts` was already spent
+at claim time, so this cannot become an infinite retry.
+
+#### `attempts` is incremented at CLAIM time
+
+Not on failure. That is what stops a worker crash-looping on one document from retrying forever:
+a process killed mid-job has already paid for the attempt, so the stale sweep returns the job
+with its budget already spent.
+
+#### Two error codes were declared and never raised
+
+`PDF_CORRUPT` and `PDF_ENCRYPTED` had been in the taxonomy since the design was written, and
+nothing produced them — a truncated PDF came through as a bare `pdfjs` exception, classified
+`UNKNOWN` and therefore **transient**, so it was retried three times. Found by dropping a
+half-written file into the inbox.
+
+The same run found a third: `invalid input syntax for type numeric: "USD 0.00"`. SQLSTATE class
+22 (data exception) was not in the classifier, only class 23 — so a value that can never cast was
+also retried three times. Both are our bug, so neither may retry. See the `type: money` entry
+below; **this is the class of bug that only writing to a real database can produce.**
+
+#### Where `.env` actually reached
+
+Nowhere, locally. `docker compose` reads it via `env_file`, but nothing read it for a local run:
+`dotenv` is not a dependency and `--env-file` needs Node 20.6+ while the machine this was built
+on has 18. So `npm run migrate` failed on the `DATABASE_URL` guard with a perfectly good URL
+sitting in `.env`. `config/dotenv.ts` is a 20-line loader with the precedence that matters — a
+variable already in the environment WINS, so `LLM_MODE=record npm run accuracy` is not silently
+overridden, docker-compose's own `environment:` block still beats the mounted file, and the
+offline test guard cannot be undone by a committed `.env`.
 
 ### Phase 9 — full API + OpenAPI
 

@@ -15,7 +15,7 @@
  * money does: 22916.67 becomes 22916.669999999998 as a float, and the point of
  * NUMERIC is defeated if anything parses it on the way to the DB.
  */
-export type ValueType = 'string' | 'number' | 'boolean' | 'date';
+export type ValueType = 'string' | 'number' | 'boolean' | 'date' | 'money';
 
 const NUMBER = /-?\d[\d,]*(?:\.\d+)?/;
 const TRUTHY = /\b(?:yes|true|signed|required|✔|✓)\b/i;
@@ -39,6 +39,10 @@ export function coerce(text: string, type: ValueType | undefined): string | bool
       // Dates go through parseDate, which needs the profile's input_format to
       // resolve the M/D vs D/M ambiguity. Returning the text unchanged lets the
       // caller do that rather than guessing here.
+      return text;
+    case 'money':
+      // Likewise parseMoney, which needs the money_format and the document's
+      // currency resolution. Handled in the pipeline; unchanged here.
       return text;
     case 'string':
     case undefined:

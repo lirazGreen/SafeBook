@@ -6,7 +6,13 @@ import { pool, withTransaction } from './pool.ts';
 
 const MIGRATIONS_DIR = join(dirname(fileURLToPath(import.meta.url)), 'migrations');
 
-async function run() {
+/**
+ * Exported and no longer self-invoking, so the integration-test setup can
+ * migrate its own database. Importing a module must not have the side effect of
+ * running migrations and then closing the pool — `seed.ts` already guarded its
+ * CLI block this way and this one had not been brought into line.
+ */
+export async function runMigrations(): Promise<number> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
       name       TEXT PRIMARY KEY,
@@ -50,12 +56,15 @@ async function run() {
   }
 
   console.log(ran === 0 ? 'no pending migrations' : `${ran} migration(s) applied`);
+  return ran;
 }
 
-run()
-  .then(() => pool.end())
-  .catch(async (err) => {
-    console.error(err instanceof Error ? err.message : err);
-    await pool.end();
-    process.exit(1);
-  });
+if (import.meta.url === `file://${process.argv[1]}`) {
+  runMigrations()
+    .then(() => pool.end())
+    .catch(async (err) => {
+      console.error(err instanceof Error ? err.message : err);
+      await pool.end();
+      process.exit(1);
+    });
+}

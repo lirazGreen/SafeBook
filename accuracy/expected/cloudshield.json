@@ -49,7 +49,8 @@
     "subscription_term_months": "36.00",
     "po_required": false,
     "po_number": null,
-    "po_amount": "USD 0.00"
+    "_poAmountNote": "0.00 not \"USD 0.00\": the column is NUMERIC(18,2). Storing the raw string aborted the entire insert with invalid input syntax for type numeric — caught only by writing to a real database.",
+    "po_amount": "0.00"
   },
   "items": [
     { "productName": "CloudShield Enterprise", "itemStartDate": "2025-03-01", "itemEndDate": "2026-02-28", "quantity": "180000", "unitPrice": "3.25",     "totalAmount": "7020000.00", "currency": "USD" },

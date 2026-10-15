@@ -1,5 +1,6 @@
 import express from 'express';
 import { pool } from '../db/pool.ts';
+import { enqueue, getJob, pendingJobId, waitForJob } from '../jobs/repo.ts';
 import { formatMmDdYyyy } from '../extract/normalize/date.ts';
 import { formatNetTerms } from '../extract/normalize/netTerms.ts';
 
@@ -13,6 +14,23 @@ import { formatNetTerms } from '../extract/normalize/netTerms.ts';
 // so there is no Date object to mishandle here.
 const outDate = (d: string | null) => (d === null ? null : formatMmDdYyyy(d.slice(0, 10)));
 
+/**
+ * Renders every DATE in a row, whatever it is called.
+ *
+ * The type-detail tables carry dates too — `po_date`, `quote_date`,
+ * `quote_expiration_date` — and they were coming out as ISO while the brief's
+ * nine fields were correctly `mm-dd-yyyy`. One rule, applied once, instead of a
+ * list of column names to keep in step.
+ */
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
+const renderDates = <T extends Record<string, unknown>>(row: T): T => {
+  const out: Record<string, unknown> = { ...row };
+  for (const [k, v] of Object.entries(out)) {
+    if (typeof v === 'string' && ISO_DATE.test(v)) out[k] = formatMmDdYyyy(v);
+  }
+  return out as T;
+};
+
 export function createApp() {
   const app = express();
   app.use(express.json());
@@ -24,6 +42,67 @@ export function createApp() {
     } catch {
       res.status(503).json({ ok: false, error: 'database unavailable', code: 'DB_UNAVAILABLE' });
     }
+  });
+
+  /**
+   * Sweep the inbox now instead of waiting for the timer.
+   *
+   * ENQUEUES a job rather than scanning inline: the worker owns the inbox and the
+   * stability-gate state, and the api must not duplicate that logic or need a
+   * filesystem mount. The claim loop picks it up within a tick, so latency is
+   * milliseconds rather than a poll interval.
+   *
+   * `?wait=<ms>` long-polls until the job settles and returns the summary
+   * directly — which is what makes a demo immediate and integration tests
+   * deterministic without sleeping on a timer.
+   */
+  app.post('/scan', async (req, res) => {
+    const waitMs = Number((req.query['wait'] as string | undefined) ?? 0);
+    try {
+      // A partial unique index caps pending document-less jobs at one per kind,
+      // so hammering this coalesces instead of queueing a hundred sweeps.
+      const { jobId, alreadyQueued } = await enqueue('scan_inbox');
+      // On a coalesce, wait on the sweep that is ALREADY pending rather than
+      // returning a bare `already_queued`. The polling timer queues a tick every
+      // couple of seconds, so losing that race is the common case, not the edge
+      // one — and without this `?wait=` quietly became fire-and-forget.
+      const id = jobId ?? (await pendingJobId('scan_inbox'));
+      if (id === null) {
+        // Queued and settled between the INSERT and the lookup. Nothing to wait
+        // for, which is a success rather than an error.
+        res.status(202).json({ status: 'already_completed', coalesced: true });
+        return;
+      }
+      if (!Number.isFinite(waitMs) || waitMs <= 0) {
+        res.status(202).json({ status: 'queued', jobId: id, coalesced: alreadyQueued });
+        return;
+      }
+      const job = await waitForJob(id, Math.min(waitMs, 120_000));
+      const settled = job?.['status'] === 'done' || job?.['status'] === 'failed';
+      res.status(settled ? 200 : 202).json({
+        status: job?.['status'] ?? 'unknown', jobId: id, coalesced: alreadyQueued,
+        ...(job?.['result'] as Record<string, unknown> | null ?? {}),
+        ...(job?.['error'] ? { error: job['error'], code: job['error_code'] } : {}),
+      });
+    } catch (err) {
+      res.status(503).json({
+        error: err instanceof Error ? err.message : String(err), code: 'DB_UNAVAILABLE',
+      });
+    }
+  });
+
+  app.get('/jobs/:id', async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: 'id must be an integer', code: 'BAD_REQUEST' });
+      return;
+    }
+    const job = await getJob(id);
+    if (job === null) {
+      res.status(404).json({ error: `no job ${id}`, code: 'NOT_FOUND' });
+      return;
+    }
+    res.json(job);
   });
 
   app.get('/documents', async (req, res) => {
@@ -95,14 +174,10 @@ export function createApp() {
       paymentTerms: doc['payment_terms_days'] === null ? null : formatNetTerms(Number(doc['payment_terms_days'])),
       billingFrequency: doc['billing_frequency'],
       attributes: doc['attributes'],
-      typeDetails: details.rows[0] ?? null,
-      parties: parties.rows.map((p) => ({ ...p, signature_date: outDate(p['signature_date'] as string | null) })),
-      items: items.rows.map((i) => ({
-        ...i,
-        item_start_date: outDate(i['item_start_date'] as string | null),
-        item_end_date: outDate(i['item_end_date'] as string | null),
-      })),
-      specialTerms: terms.rows,
+      typeDetails: details.rows[0] === undefined ? null : renderDates(details.rows[0]),
+      parties: parties.rows.map(renderDates),
+      items: items.rows.map(renderDates),
+      specialTerms: terms.rows.map(renderDates),
       currentRunId: doc['current_run_id'] === null ? null : Number(doc['current_run_id']),
     });
   });

@@ -60,7 +60,14 @@ const FieldSpec = z
     sections: z.array(z.string()).optional(),
     /** Which column of a two-column signature block is the buyer's. */
     buyer_column: z.enum(['left', 'right']).optional(),
-    type: z.enum(['string', 'number', 'boolean', 'date']).optional(),
+    /**
+     * `money` matters as much as `number`: order_form_details.po_amount is
+     * NUMERIC(18,2), and CloudShield's decoy block states it as `USD 0.00`.
+     * Storing the raw text aborted the whole insert with
+     * `invalid input syntax for type numeric: "USD 0.00"` — found only by
+     * writing to a real database, because nothing before that layer cared.
+     */
+    type: z.enum(['string', 'number', 'boolean', 'date', 'money']).optional(),
   })
   .strict();
 

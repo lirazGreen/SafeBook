@@ -234,11 +234,19 @@ export async function runExtraction(input: PipelineInput): Promise<ExtractionRes
     return spec.pattern !== undefined ? patternValue(text, spec.pattern) : null;
   };
 
-  /** Applies `type`, with dates still routed through the declared input_format. */
-  const typed = (spec: Spec, found: { text: string }): string | boolean | null =>
-    spec.type === 'date' || spec.input_format !== undefined || spec.input_formats !== undefined
-      ? dateFrom(found.text, spec)
-      : coerce(found.text, spec.type as ValueType | undefined);
+  /**
+   * Applies `type`. Dates and money are routed to their own normalisers rather
+   * than coerced here, because each needs profile context coerce() does not
+   * have — the declared input_format to resolve M/D vs D/M, and the money_format
+   * plus the document's currency.
+   */
+  const typed = (spec: Spec, found: { text: string }): string | boolean | null => {
+    if (spec.type === 'date' || spec.input_format !== undefined || spec.input_formats !== undefined) {
+      return dateFrom(found.text, spec);
+    }
+    if (spec.type === 'money') return parseMoney(found.text, spec.money_format)?.amount ?? null;
+    return coerce(found.text, spec.type as ValueType | undefined);
+  };
 
   // ---- 4. document-level fields
   const field = (name: string) => def.fields?.[name];

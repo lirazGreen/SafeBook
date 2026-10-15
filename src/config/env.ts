@@ -1,4 +1,10 @@
 import { z } from 'zod';
+import { loadDotEnv } from './dotenv.ts';
+
+// Before the schema reads process.env. A variable already in the environment
+// wins, so an explicit `LLM_MODE=record npm run accuracy` and docker-compose's
+// own `environment:` block both still take precedence over the file.
+loadDotEnv();
 
 const Env = z.object({
   /**
